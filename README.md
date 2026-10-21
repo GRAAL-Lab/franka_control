@@ -3,9 +3,7 @@
 ROS2 Jazzy / C++17 control stack for the **original seven-joint Franka Emika Panda**,
 with a direct **libfranka** hardware driver and a kinematic simulator.
 
-The package boundaries and command/state architecture follow
-`sources/undroid_arm_ctrl`; the ROS2 package, parameter and launch layout follows
-`sources/ulisse_core`. Reference projects under `sources/` are not build inputs.
+
 
 ## Packages
 
@@ -55,8 +53,7 @@ colcon build --base-paths fer_* --symlink-install \
 source install/setup.bash
 ```
 
-Use `--base-paths fer_*` so colcon does not discover the reference ROS1/ROS2
-workspaces in `sources/`. Source `install/setup.bash` in each new terminal.
+Source `install/setup.bash` in each new terminal.
 
 ## Run
 
