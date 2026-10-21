@@ -2,3 +2,4 @@
   ros__parameters:
     base_frame: panda_link0
     tool_frame: fer_tool
+    goal_frame: goal

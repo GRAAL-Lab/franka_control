@@ -2,12 +2,15 @@
 <package format="3">
     <name>fer_tcp_bridge</name>
     <version>0.1.0</version>
-    <description>Optional JSON-lines TCP access to the FER ROS2 command service.</description>
+    <description>Undroid-style C++ binary TCP command and feedback bridge for FER.</description>
     <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
     <license>MIT</license>
     <buildtool_depend>ament_cmake</buildtool_depend>
-    <exec_depend>rclpy</exec_depend>
-    <exec_depend>fer_msgs</exec_depend>
+    <depend>rclcpp</depend>
+    <depend>fer_msgs</depend>
+    <depend>fer_model</depend>
+    <depend>boost</depend>
+    <test_depend>ament_cmake_gtest</test_depend>
     <export>
         <build_type>ament_cmake</build_type>
     </export>

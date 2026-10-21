@@ -19,7 +19,9 @@ KinematicController::KinematicController()
     std::string configurationFile = declare_parameter("configuration_file", defaultFile);
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
     toolFrame_ = declare_parameter("tool_frame", "fer_tool");
-    controller_ = std::make_unique<TaskPriorityController>(configurationFile);
+    goalFrame_ = declare_parameter("goal_frame", "goal");
+    bool simulatedDriver = declare_parameter("simulated_driver", false);
+    controller_ = std::make_unique<TaskPriorityController>(configurationFile, simulatedDriver);
     Initialization();
     RCLCPP_INFO(
         get_logger(), "[KCL] Loaded tasks, priority levels and actions from %s", configurationFile.c_str());
@@ -71,14 +73,7 @@ void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
             return;
         }
 
-        geometry_msgs::msg::TransformStamped transform;
-        transform.header = message.header;
-        transform.child_frame_id = toolFrame_;
-        transform.transform.translation.x = message.tool_pose.position.x;
-        transform.transform.translation.y = message.tool_pose.position.y;
-        transform.transform.translation.z = message.tool_pose.position.z;
-        transform.transform.rotation = message.tool_pose.orientation;
-        tfPublisher_->sendTransform(transform);
+        PublishToTF(feedback.toolFrame, baseFrame_, toolFrame_);
     } catch (const std::exception& exception) {
         controller_->SetFault(exception.what());
         RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "[KCL] %s", exception.what());
@@ -95,6 +90,10 @@ void KinematicController::CommandsHandler(fer_msgs::srv::ControlCommand::Request
 
     bool driverOperation = request->command_type == "enable" || request->command_type == "disable"
         || request->command_type == "recover";
+    if (request->command_type == "enable" && controller_->GetState() == ID::states::idle
+        && controller_->GetRobotInfo().feedback.controlActive) {
+        driverOperation = false;
+    }
     if (driverOperation && request->command_type != "disable" && !driverClient_->service_is_ready()) {
         response->success = false;
         response->res = "Arm driver service is unavailable";
@@ -116,7 +115,6 @@ void KinematicController::CommandsHandler(fer_msgs::srv::ControlCommand::Request
         return;
     }
 
-    PublishControl(controller_->Run(SteadyTime()));
     if (driverOperation && driverClient_->service_is_ready()) {
         auto driverRequest = std::make_shared<fer_msgs::srv::DriverCommand::Request>();
         driverRequest->command_type = request->command_type;
@@ -203,8 +201,8 @@ void KinematicController::CheckDriverResponses()
 void KinematicController::Run()
 {
     try {
-        CheckDriverResponses();
         ControlOutput output = controller_->Run(SteadyTime());
+        CheckDriverResponses();
         PublishControl(output);
         PublishTasksInfo(output);
     } catch (const std::exception& exception) {
@@ -225,6 +223,23 @@ void KinematicController::PublishControl(const ControlOutput& output)
     message.target_pose = PoseToMessage(controller_->GetRobotInfo().cartesianGoalFrame);
     std::copy_n(output.jointVelocity.data(), ARM_JOINTS, message.joint_velocities.begin());
     controlDataPub_->publish(message);
+    if (message.ctrl_state == ID::states::move_cartesian) {
+        PublishToTF(controller_->GetRobotInfo().cartesianGoalFrame, baseFrame_, goalFrame_);
+    }
+}
+
+void KinematicController::PublishToTF(
+    const Pose& frame, const std::string& parentFrame, const std::string& childFrame)
+{
+    geometry_msgs::msg::TransformStamped transform;
+    transform.header.stamp = now();
+    transform.header.frame_id = parentFrame;
+    transform.child_frame_id = childFrame;
+    transform.transform.translation.x = frame.translation().x();
+    transform.transform.translation.y = frame.translation().y();
+    transform.transform.translation.z = frame.translation().z();
+    transform.transform.rotation = PoseToMessage(frame).orientation;
+    tfPublisher_->sendTransform(transform);
 }
 
 void KinematicController::PublishTasksInfo(const ControlOutput& output)

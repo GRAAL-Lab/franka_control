@@ -11,6 +11,9 @@
     <depend>fer_model</depend>
     <depend>sensor_msgs</depend>
     <depend>visualization_msgs</depend>
+    <depend>interactive_markers</depend>
+    <depend>tf2_ros</depend>
+    <depend>libconfig++-dev</depend>
     <depend>fer_ctrl</depend>
     <depend>ament_index_cpp</depend>
     <exec_depend>launch_ros</exec_depend>

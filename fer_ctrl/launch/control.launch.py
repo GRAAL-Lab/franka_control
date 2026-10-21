@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -15,6 +16,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('namespace', default_value='fer'),
+        DeclareLaunchArgument('simulated_driver', default_value='false'),
         DeclareLaunchArgument('controller_config', default_value=controller_parameters),
         DeclareLaunchArgument('kcl_config', default_value=kinematic_configuration),
         DeclareLaunchArgument('dcl_config', default_value=dynamic_configuration),
@@ -25,7 +27,10 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 LaunchConfiguration('controller_config'),
-                {'configuration_file': LaunchConfiguration('kcl_config')},
+                {
+                    'configuration_file': LaunchConfiguration('kcl_config'),
+                    'simulated_driver': ParameterValue(LaunchConfiguration('simulated_driver'), value_type=bool),
+                },
             ],
         ),
         Node(

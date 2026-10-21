@@ -44,6 +44,7 @@ def generate_launch_description():
 
         include_launch('fer_ctrl', 'control.launch.py', {
             'namespace': namespace,
+            'simulated_driver': LaunchConfiguration('use_sim'),
             'controller_config': LaunchConfiguration('controller_config'),
             'kcl_config': LaunchConfiguration('kcl_config'),
             'dcl_config': dynamic_configuration,
@@ -78,6 +79,10 @@ def generate_launch_description():
             namespace=namespace,
             output='screen',
             condition=IfCondition(LaunchConfiguration('rviz')),
+            parameters=[
+                LaunchConfiguration('controller_config'),
+                {'configuration_file': LaunchConfiguration('kcl_config')},
+            ],
         ),
         Node(
             package='rviz2',
@@ -85,6 +90,5 @@ def generate_launch_description():
             namespace=namespace,
             condition=IfCondition(LaunchConfiguration('rviz')),
             arguments=['-d', package_file('fer_bringup', 'conf/fer.rviz')],
-            remappings=[('/fer/visualization/arm', 'visualization/arm')],
         ),
     ])

@@ -9,7 +9,7 @@ namespace fer {
 
 class TaskPriorityController {
 public:
-    explicit TaskPriorityController(const std::string& configurationFile);
+    explicit TaskPriorityController(const std::string& configurationFile, bool simulatedDriver = false);
 
     bool SetFeedback(const RobotFeedback& feedback, double receiveTime);
     CommandResult ExecuteCommand(const CommandRequest& request, double currentTime);
@@ -27,7 +27,7 @@ public:
 private:
     void Initialization();
     void SetUpTasks();
-    void SetUpFSM(libconfig::Config& configuration);
+    void SetUpFSM(libconfig::Config& configuration, bool simulatedDriver);
     void UpdateTasks();
     void ApplyJointLimits(ControlOutput& output);
     void ChangeState(const std::string& stateName, const std::string& message);

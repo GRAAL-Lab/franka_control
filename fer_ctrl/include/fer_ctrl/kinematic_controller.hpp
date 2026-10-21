@@ -40,10 +40,12 @@ private:
     void PublishControl(const ControlOutput& output);
     void PublishTasksInfo(const ControlOutput& output);
     void PublishAction();
+    void PublishToTF(const Pose& frame, const std::string& parentFrame, const std::string& childFrame);
 
     std::unique_ptr<TaskPriorityController> controller_;
     std::string baseFrame_;
     std::string toolFrame_;
+    std::string goalFrame_;
     std::vector<PendingDriverRequest> pendingRequests_;
     DriverClient::SharedPtr driverClient_;
     DriverClient::SharedPtr gripperClient_;

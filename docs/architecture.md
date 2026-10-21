@@ -83,6 +83,21 @@ Each command and state has a header and implementation file under
 before changing `RobotInfo`. The FSM controls allowed commands and transitions;
 states select configured actions and update task references.
 
+The control timer follows Undroid's order: `SwitchState`, `ProcessEventQueue`,
+then `ExecuteState`, followed by task updates and the solver. Accepted commands
+schedule transitions for the next timer call. Transitions requested by a state's
+`Execute` method take effect on the following call. Driver faults and feedback
+failures still stop control immediately.
+
+Idle accepts all commands subject to feedback and driver checks. Joint-position,
+joint-velocity and Cartesian motion states accept replacement motion commands
+and park. Parking and unparking accept stop, disable and Franka recovery only;
+motion commands are rejected. Unpark is allowed from idle or parked. As in
+Undroid, `simulated_driver=true` additionally permits joint-position commands
+from parked. The bringup launch sets this parameter from `use_sim`; standalone
+`control.launch.py` defaults it to false. Self-transitions are not registered;
+updating a goal in the current motion state does not run its entry hook again.
+
 ```mermaid
 stateDiagram-v2
   [*] --> disabled
@@ -137,8 +152,9 @@ from the commanded torque because FCI compensates it internally. The reference
 generator and dynamic control law share `dcl_fer.conf`; top-level launch passes
 the same file to the dynamic node and backend.
 
-The [official libfranka impedance example](https://github.com/frankarobotics/libfranka/blob/0.9.2/examples/joint_impedance_control.cpp)
-illustrates the torque/Coriolis convention and realtime callback use.
+The [official libfranka 0.9.2 impedance example](https://github.com/frankarobotics/libfranka/blob/0.9.2/examples/joint_impedance_control.cpp)
+illustrates the torque/Coriolis convention and realtime callback use. This link
+is pinned to the release used to verify the driver's build.
 
 ## Realtime boundary and watchdogs
 
@@ -191,11 +207,30 @@ All names below are relative to the namespace, normally `/fer`:
 | `joint_states` | `sensor_msgs/msg/JointState` | Standard arm feedback |
 | `gripper/state` | `fer_msgs/msg/GripperState` | Gripper measurement and operation status |
 | `visualization/arm` | `visualization_msgs/msg/Marker` | Simplified arm geometry |
-| `/tf` | `tf2_msgs/msg/TFMessage` | Measured base-to-tool transform |
+| `visualization/joint_markers` | `visualization_msgs/msg/MarkerArray` | Arm, joints, base and configured avoidance planes |
+| `tool_control/update`, `tool_control/feedback` | Interactive-marker messages | RViz tool pose preview and drag/release events |
+| `tool_control/get_interactive_markers` | `visualization_msgs/srv/GetInteractiveMarkers` | Initial interactive marker and controls |
+| `/tf` | `tf2_msgs/msg/TFMessage` | Measured tool, joint frames, interactive preview and Cartesian goal |
 
 Feedback uses sensor-data QoS with depth one; references use reliable QoS with
 depth one. Services report acceptance, with completion observed through state.
 KCL forwards driver requests asynchronously.
+
+`RobotVisualizer` follows the original `LoadConfiguration`, `Initialization`,
+`Run`, `PublishMarkers`, `make6DofMarker` and `interactiveMarkerCB` structure.
+Pose updates publish the `ctrl_frame` preview; mouse release queues a Cartesian
+service request. No commands are sent while dragging. Joint-frame TFs use the
+Panda model and the measured tool transform comes from feedback. Plane markers
+use the same normal/offset geometry as the selected KCL configuration.
+
+`FrankaTCPBridge` contains an `ArmCommandParser` and independent 100 Hz command
+and feedback timers. It buffers incomplete TCP frames and partial writes, bounds
+pending service requests and output queues, and accepts reconnections. The
+packed `ArmProtocol` header retains Undroid's command IDs and payload framing;
+FER joint arrays contain exactly seven entries. Reports stream asynchronously
+from ROS feedback. The parser translates binary commands into the same ROS2
+service used by ROS2 clients and RViz. `dummy_client_node` monitors this protocol
+and can send stop explicitly.
 
 Namespaces separate ROS names. Multiple arms also require distinct base/tool
 frame IDs and matching frame parameters across their nodes.

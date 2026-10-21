@@ -28,7 +28,7 @@
 
 namespace fer {
 
-TaskPriorityController::TaskPriorityController(const std::string& configurationFile)
+TaskPriorityController::TaskPriorityController(const std::string& configurationFile, bool simulatedDriver)
 {
     libconfig::Config configuration;
     configuration.readFile(configurationFile.c_str());
@@ -46,7 +46,7 @@ TaskPriorityController::TaskPriorityController(const std::string& configurationF
     iCat_ = std::make_shared<tpik::iCAT>(ARM_JOINTS);
     iCat_->SetSaturation(conf_->saturationMin, conf_->saturationMax);
     solver_ = std::make_shared<tpik::Solver>(actionManager_, iCat_);
-    SetUpFSM(configuration);
+    SetUpFSM(configuration, simulatedDriver);
 }
 
 void TaskPriorityController::Initialization()
@@ -106,7 +106,7 @@ void TaskPriorityController::SetUpTasks()
     velocity->SetReferenceRate(JointVector::Zero());
 }
 
-void TaskPriorityController::SetUpFSM(libconfig::Config& configuration)
+void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool simulatedDriver)
 {
     for (auto& state : statesMap_) {
         state.second->robotInfo = robotInfo_;
@@ -130,21 +130,28 @@ void TaskPriorityController::SetUpFSM(libconfig::Config& configuration)
 
     for (const auto& currentState : statesMap_) {
         for (const auto& nextState : statesMap_) {
-            controllerFsm_.EnableTransition(currentState.first, nextState.first, true);
+            if (nextState.first != currentState.first) {
+                controllerFsm_.EnableTransition(currentState.first, nextState.first, true);
+            }
         }
         for (const auto& command : { "disable", "stop", "recover" }) {
             controllerFsm_.EnableCommandInState(currentState.first, command, true);
         }
     }
     controllerFsm_.EnableCommandInState(ID::states::disabled, "enable", true);
+    for (const auto& command : commandsMap_) {
+        controllerFsm_.EnableCommandInState(ID::states::idle, command.first, true);
+    }
     controllerFsm_.EnableCommandInState(ID::states::parked, "unpark", true);
     const std::vector<std::string> motionStates
-        = { ID::states::idle, ID::states::parking, ID::states::unparking, ID::states::move_joints_pos,
-              ID::states::move_joints_vel, ID::states::move_cartesian };
+        = { ID::states::move_joints_pos, ID::states::move_joints_vel, ID::states::move_cartesian };
     for (const auto& state : motionStates) {
         for (const auto& command : { "park", "move_joints_pos", "move_joints_vel", "move_cartesian" }) {
             controllerFsm_.EnableCommandInState(state, command, true);
         }
+    }
+    if (simulatedDriver) {
+        controllerFsm_.EnableCommandInState(ID::states::parked, "move_joints_pos", true);
     }
     controllerFsm_.SetInitState(ID::states::disabled);
 }
@@ -205,10 +212,14 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
         return { false, "Enable the controller before moving" };
     }
 
+    if (unconditional && controllerFsm_.GetNextStateName() != GetState()) {
+        // SetNextState(current) is a no-op in FSM. Reset its pending target so
+        // stop/disable/recover can cancel a transition before the timer applies it.
+        controllerFsm_.SetInitState(GetState());
+    }
     auto command = commandsMap_.at(commandName);
     command->SetRequest(request);
     fsm::retval result = controllerFsm_.ExecuteCommand(commandName);
-    controllerFsm_.SwitchState();
     return { result == fsm::ok, robotInfo_->status };
 }
 
@@ -241,6 +252,8 @@ ControlOutput TaskPriorityController::Run(double currentTime)
     ControlOutput output;
     robotInfo_->currentTime = currentTime;
     actionManager_->Time(static_cast<long>(currentTime * 1000.0));
+    controllerFsm_.SwitchState();
+    controllerFsm_.ProcessEventQueue();
     if (!HasFreshFeedback(currentTime)) {
         if (IsEnabled()) {
             ChangeState(ID::states::disabled, "Feedback timeout; enable again after reconnecting");
@@ -260,7 +273,6 @@ ControlOutput TaskPriorityController::Run(double currentTime)
     robotInfo_->linearError = 0.0;
     robotInfo_->angularError = 0.0;
     controllerFsm_.ExecuteState();
-    controllerFsm_.SwitchState();
     UpdateTasks();
     const std::string state = GetState();
     if (IsEnabled() && state != ID::states::idle && state != ID::states::parked
@@ -284,6 +296,9 @@ void TaskPriorityController::ChangeState(const std::string& stateName, const std
 {
     robotInfo_->status = message;
     robotInfo_->velocityGoal.setZero();
+    if (stateName == GetState() && controllerFsm_.GetNextStateName() != stateName) {
+        controllerFsm_.SetInitState(stateName);
+    }
     controllerFsm_.SetNextState(stateName);
     controllerFsm_.SwitchState();
 }

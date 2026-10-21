@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Run after sourcing the built workspace: python3 tests/test_simulation.py."""
 
-import json
+import copy
 import math
 import os
 import signal
 import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -16,7 +17,9 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from fer_msgs.msg import ControlData, DynamicControlData, GripperState, StateData, TPIKAction, TaskStatus
 from fer_msgs.srv import ControlCommand, DriverCommand
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import InteractiveMarkerFeedback, Marker, MarkerArray
+from visualization_msgs.srv import GetInteractiveMarkers
+from tf2_msgs.msg import TFMessage
 
 
 class SimulationTest(unittest.TestCase):
@@ -34,9 +37,12 @@ class SimulationTest(unittest.TestCase):
         self.processes = []
         self.logs = []
         self.state = None
+        self.feedback_count = 0
         self.control = None
         self.gripper = None
         self.marker = None
+        self.markers = None
+        self.transforms = {}
         self.dynamic = None
         self.action = None
         self.joint_task = None
@@ -53,10 +59,14 @@ class SimulationTest(unittest.TestCase):
                                           self.gripper_callback, 1),
             self.node.create_subscription(Marker, 'visualization/arm',
                                           self.marker_callback, 1),
+            self.node.create_subscription(MarkerArray, 'visualization/joint_markers',
+                                          self.markers_callback, 1),
+            self.node.create_subscription(TFMessage, '/tf', self.tf_callback, 100),
         ]
 
     def state_callback(self, message):
         self.state = message
+        self.feedback_count += 1
 
     def control_callback(self, message):
         self.control = message
@@ -66,6 +76,13 @@ class SimulationTest(unittest.TestCase):
 
     def marker_callback(self, message):
         self.marker = message
+
+    def markers_callback(self, message):
+        self.markers = message
+
+    def tf_callback(self, message):
+        for transform in message.transforms:
+            self.transforms[transform.child_frame_id] = transform
 
     def dynamic_callback(self, message):
         self.dynamic = message
@@ -145,6 +162,7 @@ class SimulationTest(unittest.TestCase):
         self.assertFalse(self.command('park').success)
         self.assertTrue(self.command('enable').success)
         self.until(lambda: self.control.ctrl_state == 'idle' and self.state.control_active)
+        self.assertTrue(self.command('enable').success)
 
         self.assertFalse(self.command('move_joint_i_pos', joint_index=7, joint_setpoint=[0.1]).success)
         self.assertFalse(self.command('move_joints_pos', joint_setpoint=[0.0] * 6).success)
@@ -176,24 +194,73 @@ class SimulationTest(unittest.TestCase):
         self.until(lambda: self.gripper is not None and abs(self.gripper.width - 0.04) < 0.001)
 
         self.assertTrue(self.command('park').success)
+        self.until(lambda: self.control.ctrl_state == 'parking')
+        self.assertFalse(self.command('move_joint_i_pos', joint_index=0, joint_setpoint=[0.1]).success)
+        self.assertFalse(self.command('move_joint_i_vel', joint_index=0, joint_setpoint=[0.1]).success)
+        self.assertFalse(self.command('move_cartesian', move_type='relative', frame_type=1,
+                                      target_position=[0.0, 0.0, 0.01]).success)
         self.until(lambda: self.control.ctrl_state == 'parked', timeout=20.0)
         self.assertFalse(self.command('move_joint_i_vel', joint_setpoint=[0.1]).success)
+
+        # The simulated driver keeps Undroid's joint-position exception in parked.
+        self.assertTrue(self.command('move_joint_i_pos', joint_index=0, joint_setpoint=[0.02],
+                                     move_type='relative').success)
+        self.until(lambda: self.control.ctrl_state == 'move_joints_pos')
+        self.until(lambda: self.control.ctrl_state == 'idle')
+        self.assertTrue(self.command('park').success)
+        self.until(lambda: self.control.ctrl_state == 'parked', timeout=20.0)
+
         self.assertTrue(self.command('unpark').success)
+        self.until(lambda: self.control.ctrl_state == 'unparking')
+        self.assertFalse(self.command('move_joint_i_pos', joint_index=0, joint_setpoint=[0.1]).success)
+        self.assertFalse(self.command('park').success)
         self.until(lambda: self.control.ctrl_state == 'idle', timeout=20.0)
 
         with socket.create_connection(('127.0.0.1', port), timeout=3.0) as connection:
-            stream = connection.makefile('rwb')
-            stream.write(b'{"command_type":"stop"}\n')
-            stream.flush()
-            self.assertTrue(json.loads(stream.readline())['success'])
-            stream.write(b'{"op":"state"}\n')
-            stream.flush()
-            status = json.loads(stream.readline())
-            self.assertTrue(status['success'])
-            self.assertEqual(len(status['state']['joints']), 7)
-            stream.write(b'{"unexpected":true}\n')
-            stream.flush()
-            self.assertFalse(json.loads(stream.readline())['success'])
+            stream = connection.makefile('rb')
+
+            def read_report(report_id):
+                for _ in range(1000):
+                    header = stream.read(12)
+                    self.assertEqual(len(header), 12)
+                    _, received_id, length = struct.unpack('<III', header)
+                    self.assertLessEqual(length, 64)
+                    payload = stream.read(length)
+                    self.assertEqual(len(payload), length)
+                    if received_id == report_id:
+                        return payload
+                self.fail('Expected TCP report was not received')
+
+            # Fragment a command header across writes to exercise TCP stream framing.
+            stop = struct.pack('<III', 0, 0, 0)
+            connection.sendall(stop[:5])
+            time.sleep(0.02)
+            connection.sendall(stop[5:])
+            joints = struct.unpack('<8d', read_report(1))
+            self.assertEqual(len(joints[:7]), 7)
+            self.assertTrue(all(math.isfinite(value) for value in joints))
+            self.assertEqual(len(read_report(2)), 6 * 8)
+            self.assertEqual(len(read_report(3)), 7 * 8)
+
+            # A binary relative command can address the seventh Panda joint.
+            initial_joint_7 = self.state.joint_state.position[6]
+            payload = struct.pack('<id', 6, 0.02)
+            connection.sendall(struct.pack('<III', 0, 11, len(payload)) + payload)
+            self.until(lambda: self.control.ctrl_state == 'move_joints_pos')
+            self.until(lambda: self.control.ctrl_state == 'idle')
+            self.assertAlmostEqual(self.state.joint_state.position[6], initial_joint_7 + 0.02, delta=0.012)
+
+            # Reject a six-joint payload and keep the next coalesced frame aligned.
+            invalid = struct.pack('<III6d', 0, 9, 48, *([0.0] * 6))
+            connection.sendall(invalid + stop)
+            self.assertEqual(len(read_report(0)), 4)
+            stream.close()
+
+        client = self.start(['ros2', 'run', 'fer_tcp_bridge', 'dummy_client_node', '--ros-args',
+                             '-p', f'port:={port}', '-p', 'max_reports:=3'])
+        self.expected_exits.add(client.pid)
+        self.until(lambda: client.poll() is not None)
+        self.assertEqual(client.returncode, 0)
 
         self.assertTrue(self.command('disable').success)
         self.until(lambda: self.control.ctrl_state == 'disabled' and not self.state.control_active)
@@ -229,7 +296,7 @@ class SimulationTest(unittest.TestCase):
         kinematic = self.start(['ros2', 'run', 'fer_ctrl', 'kinematic_control_node', '--ros-args',
                                 '-r', f'__ns:={self.namespace}'])
         self.until(lambda: self.state is not None and self.control is not None
-                   and self.dynamic is not None, timeout=20.0)
+                   and self.dynamic is not None and self.feedback_count >= 20, timeout=20.0)
         deadline = time.monotonic() + 5.0
         while True:
             response = self.command('enable')
@@ -263,9 +330,64 @@ class SimulationTest(unittest.TestCase):
         self.assertIn('watchdog', self.state.error)
         self.assertFalse(self.command('enable').success)
         self.assertTrue(self.command('recover').success)
-        self.until(lambda: not self.state.has_error)
-        self.assertEqual(self.control.ctrl_state, 'disabled')
+        self.until(lambda: not self.state.has_error and self.control.ctrl_state == 'disabled')
         self.assertFalse(self.state.control_active)
+
+    def test_interactive_tool_control_and_goal_tf(self):
+        self.start_control_stack()
+        self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
+                    '-r', f'__ns:={self.namespace}'])
+        self.until(lambda: self.markers is not None
+                   and all(f'panda_joint{joint}' in self.transforms for joint in range(1, 8)))
+        joints = [marker for marker in self.markers.markers if marker.ns == 'manipulator_joints']
+        self.assertEqual(len(joints), 7)
+        self.assertTrue(any(marker.ns == 'manipulator_base' for marker in self.markers.markers))
+        planes = [marker for marker in self.markers.markers if marker.ns == 'avoidance_planes']
+        self.assertEqual(len(planes), 1)
+        self.assertAlmostEqual(planes[0].pose.position.z, 0.1)
+        for joint in range(1, 8):
+            self.assertEqual(self.transforms[f'panda_joint{joint}'].header.frame_id, 'panda_link0')
+
+        response = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(len(response.markers), 1)
+        marker = response.markers[0]
+        self.assertEqual(marker.name, 'tool_control')
+        self.assertEqual(len(marker.controls), 7)
+        self.assertAlmostEqual(marker.pose.position.x, self.state.tool_pose.position.x, delta=0.001)
+
+        publisher = self.node.create_publisher(InteractiveMarkerFeedback, 'tool_control/feedback', 10)
+        self.until(lambda: publisher.get_subscription_count() > 0)
+        feedback = InteractiveMarkerFeedback()
+        feedback.header.frame_id = 'panda_link0'
+        feedback.client_id = 'integration_test'
+        feedback.marker_name = marker.name
+        feedback.control_name = 'move_x'
+        feedback.pose = copy.deepcopy(marker.pose)
+        feedback.event_type = InteractiveMarkerFeedback.MOUSE_DOWN
+        publisher.publish(feedback)
+        feedback.pose.position.x += 0.015
+        feedback.event_type = InteractiveMarkerFeedback.POSE_UPDATE
+        publisher.publish(feedback)
+        self.until(lambda: 'ctrl_frame' in self.transforms
+                   and abs(self.transforms['ctrl_frame'].transform.translation.x - feedback.pose.position.x) < 1e-8)
+        self.assertEqual(self.control.ctrl_state, 'idle')
+
+        feedback.event_type = InteractiveMarkerFeedback.MOUSE_UP
+        publisher.publish(feedback)
+        self.until(lambda: self.control.ctrl_state == 'move_cartesian')
+        self.until(lambda: 'goal' in self.transforms
+                   and abs(self.transforms['goal'].transform.translation.x - feedback.pose.position.x) < 1e-8)
+        goal = self.transforms['goal']
+        self.assertEqual(goal.header.frame_id, 'panda_link0')
+        self.assertAlmostEqual(goal.transform.translation.y, feedback.pose.position.y)
+        self.assertAlmostEqual(goal.transform.translation.z, feedback.pose.position.z)
+        orientation = goal.transform.rotation
+        expected = feedback.pose.orientation
+        quaternion_dot = (orientation.x * expected.x + orientation.y * expected.y
+                          + orientation.z * expected.z + orientation.w * expected.w)
+        self.assertAlmostEqual(abs(quaternion_dot), 1.0)
+        self.until(lambda: self.control.ctrl_state == 'idle')
+        self.assertAlmostEqual(self.state.tool_pose.position.x, feedback.pose.position.x, delta=0.0025)
 
 
 if __name__ == '__main__':

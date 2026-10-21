@@ -13,13 +13,19 @@ Visualization Manager:
       Enabled: true
       Cell Size: 0.1
       Plane Cell Count: 20
-    - Class: rviz_default_plugins/Marker
-      Name: Simulated arm
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Arm, joints, base and avoidance planes
       Enabled: true
-      Marker Topic:
-        Value: /fer/visualization/arm
+      Topic:
+        Value: visualization/joint_markers
         Reliability Policy: Reliable
         Durability Policy: Volatile
+    - Class: rviz_default_plugins/InteractiveMarkers
+      Name: Tool control
+      Enabled: true
+      Show Axes: true
+      Show Descriptions: true
+      Interactive Markers Namespace: tool_control
     - Class: rviz_default_plugins/TF
       Name: Frames
       Enabled: true

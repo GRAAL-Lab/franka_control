@@ -39,8 +39,8 @@ The simulator uses the same dynamic-controller library.
 | `fer_model` | Panda kinematics and `FrankaArmModel`, the RML model used by IKCL |
 | `fer_ctrl` | Kinematic controller, command/state classes, configuration loaders and dynamic controller |
 | `fer_driver` | libfranka arm torque driver and independent gripper node |
-| `fer_sim` | Joint-dynamics simulator and arm marker visualizer |
-| `fer_tcp_bridge` | Optional JSON-lines TCP adapter for the command service |
+| `fer_sim` | Joint-dynamics simulator, RViz geometry, joint TFs and interactive tool control |
+| `fer_tcp_bridge` | C++ binary ArmProtocol bridge, separate parser, feedback loops and dummy client |
 | `fer_bringup` | Complete hardware/simulation launch and RViz configuration |
 
 Headers and implementations are separated into `include/<package>/` and
@@ -60,11 +60,20 @@ same GRAAL libraries used by the reference controller: `rml`, `fsm`,
 `ctrl_toolbox`, `tpik`, and `ikcl`. Their CMake packages must be discoverable
 through the normal prefixes or `CMAKE_PREFIX_PATH`.
 
-For hardware, install a libfranka version compatible with the robot firmware.
-See the [official libfranka installation instructions](https://frankarobotics.github.io/docs/doc/libfranka/README.html)
-and [realtime host setup](https://frankarobotics.github.io/docs/doc/libfranka/docs/real_time_kernel.html).
-The driver links `Franka::Franka`; its hardware build is checked against
-libfranka 0.9.2.
+For hardware, use [libfranka 0.9.2](https://github.com/frankarobotics/libfranka/releases/tag/0.9.2),
+the release used to verify this driver's build, with compatible Panda firmware.
+Use the [0.9.2 API headers](https://github.com/frankarobotics/libfranka/tree/0.9.2/include/franka)
+and [0.9.2 examples](https://github.com/frankarobotics/libfranka/tree/0.9.2/examples)
+as the driver API references.
+
+The driver links `Franka::Franka`. CMake requests a minimum version of 0.9 through
+`find_package(Franka 0.9 REQUIRED)`; 0.9.2 is the build-verified baseline.
+Other releases, including 0.15.0, have not been verified for this stack.
+
+The upstream [realtime host setup](https://frankarobotics.github.io/docs/doc/libfranka/docs/real_time_kernel.html)
+is current Linux kernel and scheduling guidance, independent of the driver API
+version. Use it for host configuration; use the release-pinned references above
+for libfranka API details.
 
 Run from this repository root:
 
@@ -188,23 +197,44 @@ ros2 launch fer_bringup fer.launch.py with_tcp:=true tcp_port:=9999
 ```
 
 The default address is `127.0.0.1`; `tcp_host` selects another address.
-Send one JSON request per line, using the `ControlCommand` fields:
+The C++ bridge follows Undroid's protocol/parser/command-loop/feedback-loop
+organization. Its installed [armprotocol.h](fer_tcp_bridge/include/fer_tcp_bridge/armprotocol.h)
+defines command IDs, reports and packed structures. Each packet contains three
+little-endian `uint32` fields (`destination`, `msgId`, payload `length`), followed
+by the payload. Length excludes the 12-byte header. Joint positions and efforts
+contain seven values; six-joint commands are rejected.
 
-```json
-{"command_type":"enable"}
-{"command_type":"move_joint_i_pos","joint_index":0,"joint_setpoint":[0.1],"move_type":"relative"}
-{"command_type":"stop"}
-{"op":"state"}
+This sends a stop command and reads the binary report stream:
+
+```bash
+ros2 run fer_tcp_bridge dummy_client_node --ros-args \
+  -p port:=9999 -p command:=stop -p max_reports:=10
 ```
 
-Each line receives a JSON response. `op: state` returns the latest controller,
-joints, commanded torques, errors and feedback age. This seven-joint SI-unit
-protocol differs from Undroid's six-joint binary wire format.
+Leaving `command` empty makes the dummy client monitor feedback. The bridge
+streams controller status, seven joint positions plus gripper opening, measured
+tool pose, joint efforts and gripper grasp state. Command-service results are
+logged; completion is observed through the report stream. Angles use radians,
+positions use metres, gripper opening uses percent, and grasp force uses newtons.
+The original `MOTORS_CURRENT` report ID now carries Franka joint torque in Nm.
+
+## RViz tool control
+
+Launch with `rviz:=true` to display the arm, seven joint markers, the base and
+the avoidance planes from the selected `kcl_config`. The interactive tool marker
+starts at the measured tool pose. Drag its translation or rotation handles and
+release to submit an absolute BASE Cartesian goal through `ControlCommand`.
+Feedback must be fresh and control enabled for motion to be accepted.
+
+The visualizer publishes `panda_joint1` through `panda_joint7` TFs and a
+`ctrl_frame` preview while dragging. During Cartesian motion, the kinematic
+controller publishes the configured `goal_frame` (default `goal`) alongside the
+measured tool frame. RViz topics are relative to the selected ROS namespace.
 
 ## Validation and limits
 
 ```bash
-colcon test --base-paths fer_* --packages-select fer_model fer_ctrl fer_driver \
+colcon test --base-paths fer_* --packages-select fer_model fer_ctrl fer_driver fer_tcp_bridge \
   --return-code-on-test-failure
 colcon test-result --verbose
 ROS_DOMAIN_ID=171 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST python3 tests/test_simulation.py
