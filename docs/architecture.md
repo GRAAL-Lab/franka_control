@@ -2,16 +2,16 @@
 
 ## Mapping from the reference systems
 
-| Undroid ROS1 component | FER ROS2 component |
+| Functionality | ROS2 component |
 | --- | --- |
-| `undroid_msgs` | `fer_msgs`, rosidl interfaces, seven joints and SI units |
-| `robot_model` / `UndroidArmModel` | `fer_model::PandaModel`; hardware uses the live libfranka model |
-| `undroid_ctrl::KinematicController`, commands, states | `fer_ctrl::Controller`, `commands::Command`, `states::State`; ROS-independent core wrapped in `rclcpp::Node` |
-| `undroid_driver` | `fer_driver/driver_node`, direct FCI joint velocities |
-| Simulated driver | `fer_sim/simulator_node`, identical state/control/services |
-| `undroid_sim` visualization | `fer_sim/visualizer_node` and RViz2 |
-| `undroid_tcp_bridge` | Optional `fer_tcp_bridge`, JSON-lines protocol |
-| ROS1 launch and libconfig | Python ROS2 launch and declared YAML parameters, following Ulisse's package layout |
+| Messages | `fer_msgs`, rosidl interfaces, seven joints and SI units |
+| Robot Model | `fer_model::PandaModel`; hardware uses the live libfranka model |
+| KCL | `fer_ctrl::Controller`, `commands::Command`, `states::State`; ROS-independent core wrapped in `rclcpp::Node` |
+| Driver | `fer_driver/driver_node`, direct FCI joint velocities |
+| Simulated driver | `fer_sim/simulator_node`, state/control/services |
+| Visualizer | `fer_sim/visualizer_node` and RViz2 |
+| TCP Bridge | Optional `fer_tcp_bridge`, JSON-lines protocol |
+| Launch and libconfig | Python ROS2 launch and declared YAML parameters |
 
 ```mermaid
 flowchart LR
