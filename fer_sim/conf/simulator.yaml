@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    loop_rate: 100.0
+    command_timeout: 0.20
+    max_joint_velocity: 0.35
+    max_joint_acceleration: 0.6
+    tool_offset: 0.1034
+    base_frame: panda_link0
+    initial_joints: [0.0, -0.7853981633974483, 0.0, -2.356194490192345, 0.0, 1.5707963267948966, 0.7853981633974483]

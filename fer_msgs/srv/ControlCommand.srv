@@ -1,0 +1,22 @@
+# Angles: rad; distance/width: m; velocity: rad/s; force: N. Joint indices: 0..6.
+# Commands: enable, disable, stop, recover, park, unpark, move_joints_pos,
+# move_joint_i_pos, move_joints_vel, move_joint_i_vel, move_cartesian,
+# gripper_move, gripper_grasp, gripper_home, gripper_stop.
+string command_type
+string move_type "absolute"
+float64[] joint_setpoint
+int32 joint_index
+float64[3] target_position
+float64[3] target_orientation
+int32 frame_type
+float64 gripper_setpoint
+float64 gripper_speed 0.05
+float64 grasp_force 20.0
+int32 EE=0
+int32 BASE=1
+string ABSMOVE=absolute
+string RELMOVE=relative
+---
+# Acceptance only. Observe ctrl_data/state_data/gripper_state for completion.
+bool success
+string res

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>fer_ctrl</name><version>0.1.0</version>
+  <description>FER command/state machine and kinematic task controller.</description>
+  <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend><depend>fer_msgs</depend><depend>fer_model</depend>
+  <depend>geometry_msgs</depend><depend>tf2_ros</depend>
+  <exec_depend>launch_ros</exec_depend><exec_depend>ament_index_python</exec_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

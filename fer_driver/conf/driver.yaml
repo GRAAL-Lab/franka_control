@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    robot_ip: "172.16.0.2"
+    command_timeout: 0.20
+    max_joint_velocity: 0.35
+    publish_rate: 100.0
+    enforce_realtime: true
+    base_frame: panda_link0

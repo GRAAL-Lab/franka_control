@@ -1,0 +1,8 @@
+# Arm: enable, disable, recover. Gripper: move, grasp, home, stop.
+string command_type
+float64 width
+float64 speed 0.05
+float64 force 20.0
+---
+bool success
+string message

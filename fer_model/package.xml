@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>fer_model</name><version>0.1.0</version>
+  <description>Seven-joint Panda kinematics and shared numerical types.</description>
+  <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend><depend>eigen3_cmake_module</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
