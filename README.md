@@ -1,51 +1,86 @@
 # Franka Emika Robot control (FER)
 
-ROS2 Jazzy / C++17 control stack for the **original seven-joint Franka Emika Panda**,
-with a direct **libfranka** hardware driver and a kinematic simulator.
+ROS2 Jazzy / C++17 control stack for the seven-joint Franka Emika Panda, with a
+task-priority kinematic controller, a joint dynamic controller, a direct libfranka
+driver, and a simulator.
 
+## Controller configuration
 
+The two controller configurations are:
 
-## Packages
+- [kcl_fer.conf](fer_ctrl/conf/kcl_fer.conf): tasks, activation parameters, gains,
+  saturations, priority levels, actions, state/action mappings, and park/unpark postures.
+  It uses the same libconfig structure as Undroid's `kcl_undroid.conf`.
+- [dcl_fer.conf](fer_ctrl/conf/dcl_fer.conf): computed-torque or joint-impedance
+  control, joint gains, reference velocity/acceleration/jerk limits, torque limits,
+  and torque-rate limits.
+
+The control chain is:
+
+```text
+ControlCommand -> KinematicController / FSM / TPIK
+               -> joint velocity reference
+               -> DynamicControlNode / reference generator
+               -> joint position, velocity and acceleration references
+               -> DynamicController::ComputeTorques() in the driver
+               -> franka::Torques
+```
+
+`dynamic_control_node` runs the ROS reference generator at 500 Hz.
+The hardware driver evaluates the dynamic control law at libfranka's 1 kHz rate
+using the current measured joints, mass matrix, and Coriolis vector.
+The simulator uses the same dynamic-controller library.
+
+## Packages and source layout
 
 | Package | Responsibility |
 | --- | --- |
-| `fer_msgs` | ROS2 commands, feedback, control and task interfaces; relative topic names |
-| `fer_model` | Panda joint limits, forward kinematics and 6×7 Jacobian for simulation |
-| `fer_ctrl` | Command validation, state machine, joint and Cartesian velocity control |
-| `fer_driver` | Arm FCI worker and independent gripper node, both using libfranka |
-| `fer_sim` | Kinematic driver replacement and arm marker visualizer |
-| `fer_tcp_bridge` | Optional JSON-lines TCP command service adapter |
+| `fer_msgs` | ROS2 commands, feedback, dynamic references, task status and TPIK action messages |
+| `fer_model` | Panda kinematics and `FrankaArmModel`, the RML model used by IKCL |
+| `fer_ctrl` | Kinematic controller, command/state classes, configuration loaders and dynamic controller |
+| `fer_driver` | libfranka arm torque driver and independent gripper node |
+| `fer_sim` | Joint-dynamics simulator and arm marker visualizer |
+| `fer_tcp_bridge` | Optional JSON-lines TCP adapter for the command service |
 | `fer_bringup` | Complete hardware/simulation launch and RViz configuration |
 
-See [the architecture](docs/architecture.md) for the state machine, threading,
-interfaces and changes from Undroid.
+Headers and implementations are separated into `include/<package>/` and
+`src/<package>/`. Commands and states follow Undroid's `GenericCommand` and
+`GenericState` organization. Functions use names such as `Initialization`,
+`SetUpFSM`, `StateDataCB`, `CommandsHandler`, `Run`, and `PublishControl`.
+Executable source files contain the ROS initialization and spin loop.
+[.clang-format](.clang-format) records the common C++ style.
 
-## Build
+See [the architecture](docs/architecture.md) for the state machine, controller
+equations, ROS interfaces, and realtime boundary.
 
-Dependencies: ROS2 Jazzy, a C++17 compiler, colcon, Eigen3, the ROS dependencies in
-the package manifests, and a libfranka version compatible with the robot firmware.
-Follow the [official libfranka installation instructions](https://frankarobotics.github.io/docs/doc/libfranka/README.html)
+## Dependencies and build
+
+Install ROS2 Jazzy, colcon, Eigen3 and `libconfig++-dev`. Build and install the
+same GRAAL libraries used by the reference controller: `rml`, `fsm`,
+`ctrl_toolbox`, `tpik`, and `ikcl`. Their CMake packages must be discoverable
+through the normal prefixes or `CMAKE_PREFIX_PATH`.
+
+For hardware, install a libfranka version compatible with the robot firmware.
+See the [official libfranka installation instructions](https://frankarobotics.github.io/docs/doc/libfranka/README.html)
 and [realtime host setup](https://frankarobotics.github.io/docs/doc/libfranka/docs/real_time_kernel.html).
-CMake locates it with
-`find_package(Franka 0.9 REQUIRED)` and links `Franka::Franka`. The hardware build
-has been verified against official libfranka **0.9.2**; firmware compatibility must
-be checked separately when selecting the installed version.
+The driver links `Franka::Franka`; its hardware build is checked against
+libfranka 0.9.2.
 
-Run from this repository root, either standalone or inside a ROS2 workspace:
+Run from this repository root:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths fer_* --ignore-src -r -y --skip-keys libfranka
+rosdep install --from-paths fer_* --ignore-src -r -y \
+  --skip-keys "libfranka rml fsm ctrl_toolbox tpik ikcl"
 colcon build --base-paths fer_* --symlink-install \
   --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 source install/setup.bash
 ```
 
-If libfranka is installed outside the usual prefixes, add
+For a custom libfranka installation, append
 `-DFranka_DIR=/path/to/lib/cmake/Franka` to the CMake arguments.
 
-For development **without libfranka**, build the same packages with the hardware
-executables disabled:
+To build for simulation without libfranka:
 
 ```bash
 colcon build --base-paths fer_* --symlink-install \
@@ -53,57 +88,64 @@ colcon build --base-paths fer_* --symlink-install \
 source install/setup.bash
 ```
 
-Source `install/setup.bash` in each new terminal.
+The GRAAL controller libraries are required in both builds. Source the installed
+workspace in each terminal. The explicit base paths keep the reference workspaces
+under `sources/` out of the build.
 
 ## Run
 
-Simulation is the default and starts disabled:
+Simulation starts both controllers and the simulated driver, initially disabled:
 
 ```bash
 ros2 launch fer_bringup fer.launch.py
-# With the arm marker view:
+# Add the arm marker view:
 ros2 launch fer_bringup fer.launch.py rviz:=true
 ```
+
+Select controller configurations explicitly:
+
+```bash
+ros2 launch fer_bringup fer.launch.py \
+  kcl_config:=/absolute/path/kcl_fer.conf \
+  dcl_config:=/absolute/path/dcl_fer.conf
+```
+
+The same `dcl_config` is passed to the dynamic node and selected backend.
+Configuration files are loaded at startup; restart the stack after changing them.
 
 Hardware:
 
 ```bash
 ros2 launch fer_bringup fer.launch.py use_sim:=false robot_ip:=172.16.0.2
-# For an arm without the Franka hand:
+# Without the Franka hand:
 ros2 launch fer_bringup fer.launch.py use_sim:=false robot_ip:=172.16.0.2 with_gripper:=false
 ```
 
-Unlock the brakes and activate FCI through Franka Desk before enabling. `enable`
-starts an FCI joint-velocity session; `disable` ends it after deceleration. These
-commands do not control power or mechanical brakes. `recover` explicitly requests
-`automaticErrorRecovery()` while the arm is stopped. Network connection failures
-require restarting the driver; connection/recovery never resumes an old motion.
+Activate FCI and unlock the brakes in Franka Desk before enabling.
+`enable` starts torque control; `disable` decelerates the joint reference and
+ends the session. These commands do not operate power or brakes.
+`recover` requests `automaticErrorRecovery()` after control has stopped.
+Connection failures require restarting the driver. Recovery and reconnection
+never resume an old motion.
 
-Parameters live in `fer_ctrl/conf/controller.yaml`, `fer_driver/conf/driver.yaml`
-and `fer_sim/conf/simulator.yaml`. Top-level launch accepts `controller_config`,
-`driver_config`, and `simulator_config` paths, plus `namespace` (default `fer`).
-The component launch files can also be used independently.
+ROS parameters for frames and driver/simulator settings remain in
+`fer_ctrl/conf/controller.yaml`, `fer_driver/conf/driver.yaml`, and
+`fer_sim/conf/simulator.yaml`. Top-level launch also accepts `controller_config`,
+`driver_config`, `simulator_config`, and `namespace` (default `fer`).
 
-## Commands
+## Commands and monitoring
 
-The service `/fer/srv/control_command` uses `fer_msgs/srv/ControlCommand`.
-Joint indices are **0..6**, joint angles and RPY are **radians**, linear quantities
-and gripper width are **metres**, and grasp force is **newtons**.
-Responses report acceptance; observe `ctrl/ctrl_data`, `state/state_data`, and
-`gripper/state` for progress, errors and completion.
+Use `/fer/srv/control_command` with `fer_msgs/srv/ControlCommand`.
+Joint indices are 0..6; joint angles and RPY are radians, distances and gripper
+width are metres, and grasp force is newtons. Responses acknowledge acceptance;
+observe state and control topics for completion.
 
 ```bash
 ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand "{command_type: enable}"
 
-# Relative joint movement (joint 1, +0.1 rad).
 ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand \
   "{command_type: move_joint_i_pos, joint_index: 0, joint_setpoint: [0.1], move_type: relative}"
 
-# Full absolute posture; exactly seven values are required.
-ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand \
-  "{command_type: move_joints_pos, joint_setpoint: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854]}"
-
-# Relative Cartesian displacement expressed in the base frame (BASE=1, EE=0).
 ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand \
   "{command_type: move_cartesian, move_type: relative, frame_type: 1, target_position: [0.0, 0.0, 0.02]}"
 
@@ -113,21 +155,31 @@ ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand "{command
 
 ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand \
   "{command_type: gripper_move, gripper_setpoint: 0.04, gripper_speed: 0.05}"
-ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand \
-  "{command_type: gripper_grasp, gripper_setpoint: 0.03, grasp_force: 20.0}"
-ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand "{command_type: gripper_stop}"
+
 ros2 service call /fer/srv/control_command fer_msgs/srv/ControlCommand "{command_type: disable}"
+
+# Configured action, ordered priority levels and task names:
+ros2 topic echo /fer/ctrl/tpik_action
+# Per-task activation functions and reference rates:
+ros2 topic echo /fer/tasks/JointsLimit
+# Dynamic references and actual commanded torques:
+ros2 topic echo /fer/ctrl/dynamic_control
+ros2 topic echo /fer/state/state_data
 ```
 
-Additional commands: `recover`, `gripper_home`, `move_joints_vel` (seven velocities),
-and `move_joint_i_vel` (one velocity and index). Refresh velocity commands faster
-than `velocity_timeout` (default 0.30 s); otherwise the controller stops in idle.
-Position and Cartesian moves have a separate `move_timeout` (30 s).
+Other commands: `move_joints_pos`, `move_joints_vel`, `move_joint_i_vel`,
+`recover`, `gripper_grasp`, `gripper_home`, and `gripper_stop`.
+Full joint requests require seven values. Refresh velocity commands before
+`velocityCommandTimeout` expires; otherwise the controller returns to idle.
+Position and Cartesian moves use `moveTimeout`.
 
-`park` and `unpark` move to configurable joint postures. Review those postures for
-the installed tool and workspace before hardware use. They have no Panda-specific
-brake or storage-mode semantics. `stop` is a software motion command; the robot's
-physical emergency-stop system remains independent.
+Cartesian frames are EE=0 and BASE=1. Absolute poses use BASE. Relative BASE
+requests add a base-frame translation and premultiply the rotation; relative EE
+requests postmultiply the tool transform.
+
+Park/unpark move to configured joint postures. Check these postures and the
+configured obstacle planes against the installed workspace and tool.
+The software `stop` command is separate from the physical emergency-stop system.
 
 ## Optional TCP bridge
 
@@ -135,8 +187,8 @@ physical emergency-stop system remains independent.
 ros2 launch fer_bringup fer.launch.py with_tcp:=true tcp_port:=9999
 ```
 
-The bridge binds to `127.0.0.1` by default (`tcp_host` selects another address).
-Send one JSON object per line, using the same fields as `ControlCommand`:
+The default address is `127.0.0.1`; `tcp_host` selects another address.
+Send one JSON request per line, using the `ControlCommand` fields:
 
 ```json
 {"command_type":"enable"}
@@ -145,29 +197,26 @@ Send one JSON object per line, using the same fields as `ControlCommand`:
 {"op":"state"}
 ```
 
-Each line receives a JSON response. `op: state` returns the latest controller and
-arm state with feedback age. This is a new seven-joint SI-unit protocol; Undroid's
-six-joint binary wire format is not compatible. Line size and request queue are
-bounded, and expired queued requests are discarded.
+Each line receives a JSON response. `op: state` returns the latest controller,
+joints, commanded torques, errors and feedback age. This seven-joint SI-unit
+protocol differs from Undroid's six-joint binary wire format.
 
-## Validation and scope
+## Validation and limits
 
 ```bash
-colcon test --base-paths fer_* --packages-select fer_model fer_ctrl fer_driver
+colcon test --base-paths fer_* --packages-select fer_model fer_ctrl fer_driver \
+  --return-code-on-test-failure
 colcon test-result --verbose
-# Starts simulation and a loopback TCP bridge; no robot connection:
 ROS_DOMAIN_ID=171 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST python3 tests/test_simulation.py
 ```
 
-Tests cover kinematics/Jacobian consistency, commands and state transitions,
-timeouts, Cartesian convergence, concurrent data exchange, complete ROS2 launch,
-gripper simulation, TCP commands and the driver watchdog/recovery sequence.
+Tests exercise task gains, enable flags, conflicting priorities, plane avoidance,
+kinematics, state transitions, dynamic control laws, torque/rate limits, reference
+shaping, ROS2 launch, TCP commands, and loss of either controller.
 
-The simulator models joint kinematics and bounded acceleration. It does not model
-dynamics, contacts, collisions or grasped objects. Hardware feedback uses
-`RobotState::O_T_EE` and `Model::zeroJacobian`, so it reflects the end-effector
-configuration set on the robot. The simulator defaults to a Panda hand TCP with
-0.1034 m offset. The controller uses Eigen damped inverse kinematics and posture
-centering; it does not depend on the private RML/FSM/TPIK libraries or implement
-Undroid's configurable task-priority/obstacle stack. This model and its limits are
-for Panda, not FR3. Physical robot operation has not been validated here.
+The simulator uses configurable diagonal joint inertia and viscous damping,
+with gravity compensation assumed. It is a control-pipeline test model, without
+full Panda dynamics, contacts, collision geometry or grasped objects.
+Hardware uses the live libfranka mass, Coriolis, TCP and Jacobian data.
+The geometric model and joint limits target Panda; FR3 is not supported by this
+configuration. Physical robot operation has not been validated here.

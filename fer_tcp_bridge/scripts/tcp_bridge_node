@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One JSON ControlCommand request and one JSON response per line."""
+"""Expose the FER command service as one JSON request and response per TCP line."""
 
 import json
 import queue
@@ -7,6 +7,7 @@ import socket
 import socketserver
 import threading
 import time
+from functools import partial
 
 import rclpy
 from rclpy.node import Node
@@ -15,20 +16,20 @@ from fer_msgs.msg import ControlData, StateData
 from fer_msgs.srv import ControlCommand
 
 
-class Job:
+class PendingCommand:
     def __init__(self, payload):
         self.payload = payload
-        self.event = threading.Event()
+        self.completed = threading.Event()
         self.deadline = time.monotonic() + 5.0
-        self.result = {'success': False, 'res': 'Controller service timed out'}
+        self.response = {'success': False, 'res': 'Controller service timed out'}
 
 
-class Server(socketserver.ThreadingTCPServer):
+class ControlCommandServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
 
-class Handler(socketserver.StreamRequestHandler):
+class ControlCommandHandler(socketserver.StreamRequestHandler):
     def handle(self):
         self.connection.settimeout(30.0)
         try:
@@ -37,132 +38,146 @@ class Handler(socketserver.StreamRequestHandler):
                 if not line:
                     return
                 if len(line) > 8192 or not line.endswith(b'\n'):
-                    self.reply({'success': False, 'res': 'Maximum line length is 8192 bytes'})
+                    self.SendResponse({'success': False, 'res': 'Maximum line length is 8192 bytes'})
                     return
-                try:
-                    payload = json.loads(line)
-                    if not isinstance(payload, dict):
-                        raise ValueError('Expected a JSON object')
-                    if payload == {'op': 'state'}:
-                        result = self.server.bridge.state()
-                    else:
-                        job = Job(payload)
-                        self.server.bridge.jobs.put_nowait(job)
-                        job.event.wait(max(0.0, job.deadline - time.monotonic()))
-                        result = job.result
-                except (ValueError, TypeError, queue.Full) as error:
-                    result = {'success': False, 'res': str(error) or 'Request queue is full'}
-                self.reply(result)
+                self.SendResponse(self.ParseCommand(line))
         except (socket.timeout, OSError):
             return
 
-    def reply(self, result):
-        self.wfile.write(json.dumps(result, allow_nan=False).encode('utf-8') + b'\n')
+    def ParseCommand(self, line):
+        try:
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise ValueError('Expected a JSON object')
+            if payload == {'op': 'state'}:
+                return self.server.bridge.GetState()
+
+            command = PendingCommand(payload)
+            self.server.bridge.commandQueue.put_nowait(command)
+            command.completed.wait(max(0.0, command.deadline - time.monotonic()))
+            return command.response
+        except (ValueError, TypeError, queue.Full) as exception:
+            return {'success': False, 'res': str(exception) or 'Command queue is full'}
+
+    def SendResponse(self, response):
+        self.wfile.write(json.dumps(response, allow_nan=False).encode('utf-8') + b'\n')
         self.wfile.flush()
 
 
-class Bridge(Node):
+class FrankaTCPBridge(Node):
     def __init__(self):
         super().__init__('tcp_bridge_node')
         host = self.declare_parameter('host', '127.0.0.1').value
         port = self.declare_parameter('port', 9999).value
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError('TCP port must be in 1..65535')
-        self.jobs = queue.Queue(maxsize=64)
-        self.client = self.create_client(ControlCommand, 'srv/control_command')
-        self.lock = threading.Lock()
-        self.latest = {}
-        self.pending = []
-        self.state_sub = self.create_subscription(StateData, 'state/state_data',
-                                                  self.feedback, qos_profile_sensor_data)
-        self.control_sub = self.create_subscription(ControlData, 'ctrl/ctrl_data',
-                                                    self.control, 1)
-        self.timer = self.create_timer(0.01, self.dispatch)
-        self.server = Server((host, port), Handler)
+
+        self.commandQueue = queue.Queue(maxsize=64)
+        self.commandClient = self.create_client(ControlCommand, 'srv/control_command')
+        self.stateMutex = threading.Lock()
+        self.latestState = {}
+        self.pendingRequests = {}
+        self.stateDataSub = self.create_subscription(
+            StateData, 'state/state_data', self.StateDataCB, qos_profile_sensor_data)
+        self.controlDataSub = self.create_subscription(
+            ControlData, 'ctrl/ctrl_data', self.ControlDataCB, 1)
+        self.runTimer = self.create_timer(0.01, self.Run)
+
+        self.server = ControlCommandServer((host, port), ControlCommandHandler)
         self.server.bridge = self
-        self.thread = threading.Thread(target=self.server.serve_forever,
-                                       kwargs={'poll_interval': 0.2}, daemon=True)
-        self.thread.start()
+        self.serverThread = threading.Thread(
+            target=self.server.serve_forever, kwargs={'poll_interval': 0.2}, daemon=True)
+        self.serverThread.start()
         self.get_logger().info(f'FER TCP bridge listening on {host}:{port}')
 
-    def feedback(self, msg):
-        with self.lock:
-            self.latest.update(connected=msg.connected, control_active=msg.control_active,
-                               has_error=msg.has_error, error=msg.error,
-                               joints=list(msg.joint_state.position),
-                               feedback_received=time.monotonic())
+    def StateDataCB(self, message):
+        with self.stateMutex:
+            self.latestState.update(
+                connected=message.connected,
+                control_active=message.control_active,
+                has_error=message.has_error,
+                error=message.error,
+                joints=list(message.joint_state.position),
+                commanded_torques=list(message.commanded_torques),
+                feedback_received=time.monotonic(),
+            )
 
-    def control(self, msg):
-        with self.lock:
-            self.latest.update(ctrl_state=msg.ctrl_state, status=msg.status)
+    def ControlDataCB(self, message):
+        with self.stateMutex:
+            self.latestState.update(ctrl_state=message.ctrl_state, status=message.status)
 
-    def state(self):
-        with self.lock:
-            result = dict(self.latest)
-        received = result.pop('feedback_received', None)
-        result['feedback_age'] = None if received is None else time.monotonic() - received
-        return {'success': True, 'state': result}
+    def GetState(self):
+        with self.stateMutex:
+            state = dict(self.latestState)
+        receiveTime = state.pop('feedback_received', None)
+        state['feedback_age'] = None if receiveTime is None else time.monotonic() - receiveTime
+        return {'success': True, 'state': state}
 
-    def dispatch(self):
-        for future, job in list(self.pending):
-            if time.monotonic() >= job.deadline:
-                self.client.remove_pending_request(future)
-                job.event.set()
-                self.pending.remove((future, job))
+    def Run(self):
+        for future, command in list(self.pendingRequests.items()):
+            if time.monotonic() >= command.deadline:
+                self.commandClient.remove_pending_request(future)
+                command.completed.set()
+                del self.pendingRequests[future]
+
         for _ in range(8):
             try:
-                job = self.jobs.get_nowait()
+                command = self.commandQueue.get_nowait()
             except queue.Empty:
                 break
-            if time.monotonic() >= job.deadline:
-                job.event.set()
+            if time.monotonic() >= command.deadline:
+                command.completed.set()
                 continue
-            try:
-                if not self.client.service_is_ready():
-                    raise ValueError('Controller service is unavailable')
-                request = ControlCommand.Request()
-                fields = request.get_fields_and_field_types()
-                for key, value in job.payload.items():
-                    if key not in fields:
-                        raise ValueError(f'Unknown request field: {key}')
-                    setattr(request, key, value)
-                future = self.client.call_async(request)
-                self.pending.append((future, job))
-                future.add_done_callback(lambda done, item=job: self.complete(done, item))
-            except (ValueError, TypeError, AssertionError) as error:
-                job.result = {'success': False, 'res': str(error)}
-                job.event.set()
+            self.SendCommand(command)
 
-    def complete(self, future, job):
-        if (future, job) not in self.pending:
+    def SendCommand(self, command):
+        try:
+            if not self.commandClient.service_is_ready():
+                raise ValueError('Controller service is unavailable')
+            request = ControlCommand.Request()
+            requestFields = request.get_fields_and_field_types()
+            for name, value in command.payload.items():
+                if name not in requestFields:
+                    raise ValueError(f'Unknown request field: {name}')
+                setattr(request, name, value)
+
+            future = self.commandClient.call_async(request)
+            self.pendingRequests[future] = command
+            future.add_done_callback(partial(self.CommandResponseCB, command=command))
+        except (ValueError, TypeError, AssertionError) as exception:
+            command.response = {'success': False, 'res': str(exception)}
+            command.completed.set()
+
+    def CommandResponseCB(self, future, command):
+        if future not in self.pendingRequests:
             return
-        self.pending.remove((future, job))
+        del self.pendingRequests[future]
         try:
             response = future.result()
-            job.result = {'success': response.success, 'res': response.res}
-        except Exception as error:
-            job.result = {'success': False, 'res': str(error)}
-        job.event.set()
+            command.response = {'success': response.success, 'res': response.res}
+        except Exception as exception:
+            command.response = {'success': False, 'res': str(exception)}
+        command.completed.set()
 
-    def close(self):
+    def Close(self):
         self.server.shutdown()
         self.server.server_close()
-        self.thread.join(timeout=1.0)
-        for _, job in self.pending:
-            job.event.set()
+        self.serverThread.join(timeout=1.0)
+        for command in self.pendingRequests.values():
+            command.completed.set()
 
 
 def main():
     rclpy.init()
     bridge = None
     try:
-        bridge = Bridge()
+        bridge = FrankaTCPBridge()
         rclpy.spin(bridge)
     except KeyboardInterrupt:
         pass
     finally:
         if bridge is not None:
-            bridge.close()
+            bridge.Close()
             bridge.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

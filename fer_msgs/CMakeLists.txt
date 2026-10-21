@@ -8,6 +8,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(fer_model REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/StateData.msg" "msg/ControlData.msg" "msg/GripperState.msg"
+  "msg/DynamicControlData.msg" "msg/TPIKPriorityLevel.msg" "msg/TPIKAction.msg"
   "msg/TaskStatus.msg" "srv/ControlCommand.srv" "srv/DriverCommand.srv"
   DEPENDENCIES std_msgs sensor_msgs geometry_msgs)
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})

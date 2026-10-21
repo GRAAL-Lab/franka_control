@@ -1,13 +1,20 @@
-<?xml version="1.0"?>
+<?xml version='1.0' encoding='utf-8'?>
 <package format="3">
-  <name>fer_bringup</name><version>0.1.0</version>
-  <description>Launch the complete FER ROS2 control architecture.</description>
-  <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
-  <license>MIT</license>
-  <buildtool_depend>ament_cmake</buildtool_depend>
-  <exec_depend>fer_ctrl</exec_depend><exec_depend>fer_driver</exec_depend>
-  <exec_depend>fer_sim</exec_depend><exec_depend>fer_tcp_bridge</exec_depend>
-  <exec_depend>launch</exec_depend><exec_depend>launch_ros</exec_depend>
-  <exec_depend>ament_index_python</exec_depend><exec_depend>rviz2</exec_depend>
-  <export><build_type>ament_cmake</build_type></export>
+    <name>fer_bringup</name>
+    <version>0.1.0</version>
+    <description>Launch the complete FER ROS2 control architecture.</description>
+    <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
+    <license>MIT</license>
+    <buildtool_depend>ament_cmake</buildtool_depend>
+    <exec_depend>fer_ctrl</exec_depend>
+    <exec_depend>fer_driver</exec_depend>
+    <exec_depend>fer_sim</exec_depend>
+    <exec_depend>fer_tcp_bridge</exec_depend>
+    <exec_depend>launch</exec_depend>
+    <exec_depend>launch_ros</exec_depend>
+    <exec_depend>ament_index_python</exec_depend>
+    <exec_depend>rviz2</exec_depend>
+    <export>
+        <build_type>ament_cmake</build_type>
+    </export>
 </package>

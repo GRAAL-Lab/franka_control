@@ -1,35 +1,55 @@
-#pragma once
+#ifndef FER_MSGS_CONVERSIONS_HPP
+#define FER_MSGS_CONVERSIONS_HPP
 
-#include <stdexcept>
-#include <vector>
 #include "fer_model/panda_model.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include <chrono>
+#include <stdexcept>
+#include <vector>
 
-namespace fer::ros {
-inline geometry_msgs::msg::Pose pose_message(const Pose& pose) {
-  geometry_msgs::msg::Pose msg;
-  msg.position.x = pose.translation().x();
-  msg.position.y = pose.translation().y();
-  msg.position.z = pose.translation().z();
-  const Eigen::Quaterniond q(pose.linear());
-  msg.orientation.x = q.x(); msg.orientation.y = q.y();
-  msg.orientation.z = q.z(); msg.orientation.w = q.w();
-  return msg;
+namespace fer {
+
+inline double SteadyTime()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-inline Pose pose(const geometry_msgs::msg::Pose& msg) {
-  const Eigen::Quaterniond q(msg.orientation.w, msg.orientation.x,
-                             msg.orientation.y, msg.orientation.z);
-  if (!q.coeffs().allFinite() || std::abs(q.norm() - 1.) > 1e-5) {
-    throw std::invalid_argument("Invalid feedback quaternion");
-  }
-  Pose result = Pose::Identity();
-  result.translation() = Eigen::Vector3d(msg.position.x, msg.position.y, msg.position.z);
-  result.linear() = q.toRotationMatrix();
-  return result;
+
+inline geometry_msgs::msg::Pose PoseToMessage(const Pose& frame)
+{
+    geometry_msgs::msg::Pose message;
+    message.position.x = frame.translation().x();
+    message.position.y = frame.translation().y();
+    message.position.z = frame.translation().z();
+    Eigen::Quaterniond orientation(frame.linear());
+    message.orientation.x = orientation.x();
+    message.orientation.y = orientation.y();
+    message.orientation.z = orientation.z();
+    message.orientation.w = orientation.w();
+    return message;
 }
-inline std::vector<std::string> joint_names() {
-  std::vector<std::string> result;
-  for (int i = 1; i <= 7; ++i) result.push_back("panda_joint" + std::to_string(i));
-  return result;
+
+inline Pose MessageToPose(const geometry_msgs::msg::Pose& message)
+{
+    Eigen::Quaterniond orientation(
+        message.orientation.w, message.orientation.x, message.orientation.y, message.orientation.z);
+    if (!orientation.coeffs().allFinite() || std::abs(orientation.norm() - 1.0) > 1e-5) {
+        throw std::invalid_argument("Invalid feedback quaternion");
+    }
+    Pose frame = Pose::Identity();
+    frame.translation() = Eigen::Vector3d(message.position.x, message.position.y, message.position.z);
+    frame.linear() = orientation.toRotationMatrix();
+    return frame;
 }
-}  // namespace fer::ros
+
+inline std::vector<std::string> JointNames()
+{
+    std::vector<std::string> names;
+    for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
+        names.push_back("panda_joint" + std::to_string(joint + 1));
+    }
+    return names;
+}
+
+}
+
+#endif

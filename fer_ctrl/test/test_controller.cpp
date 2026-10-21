@@ -1,170 +1,321 @@
-#include <limits>
+#include "fer_ctrl/task_priority_controller.hpp"
 #include <gtest/gtest.h>
-#include "fer_ctrl/controller.hpp"
+#include <filesystem>
+#include <limits>
+#include <unistd.h>
 
 namespace {
+
 class ControllerTest : public ::testing::Test {
- protected:
-  fer::Controller controller;
-  fer::Feedback f;
-  double time{1.};
-  void SetUp() override {
-    f.connected = f.ready = true;
-    const auto model = fer::PandaModel().evaluate(f.q);
-    f.tool = model.tool; f.jacobian = model.jacobian;
-    ASSERT_TRUE(controller.feedback(f, time));
-  }
-  fer::Result send(fer::commands::Type type) {
-    fer::commands::Command c; c.type = type;
-    return controller.execute(c, time);
-  }
-  void enable() {
-    ASSERT_TRUE(send(fer::commands::Type::Enable).success);
-    EXPECT_EQ(controller.state(), fer::states::State::Enabling);
-    f.active = true;
-    controller.feedback(f, time);
-    controller.update(time);
-    EXPECT_EQ(controller.state(), fer::states::State::Idle);
-  }
+protected:
+    void SetUp() override
+    {
+        configuration_.readFile(FER_KCL_CONFIG);
+        configuration_.lookup("actionTransitionDuration") = 0.0;
+        controller_ = MakeController();
+        feedback_.connected = true;
+        feedback_.ready = true;
+        ASSERT_TRUE(controller_->SetFeedback(feedback_, currentTime_));
+    }
+
+    void TearDown() override
+    {
+        for (const auto& file : configurationFiles_) {
+            std::filesystem::remove(file);
+        }
+    }
+
+    std::unique_ptr<fer::TaskPriorityController> MakeController()
+    {
+        std::string file = "/tmp/fer_kcl_test_" + std::to_string(getpid()) + "_"
+            + std::to_string(configurationFiles_.size()) + ".conf";
+        configuration_.writeFile(file.c_str());
+        configurationFiles_.push_back(file);
+        return std::make_unique<fer::TaskPriorityController>(file);
+    }
+
+    fer::CommandResult SendCommand(const std::string& command)
+    {
+        fer::CommandRequest request;
+        request.commandType = command;
+        return controller_->ExecuteCommand(request, currentTime_);
+    }
+
+    void Enable()
+    {
+        ASSERT_TRUE(SendCommand("enable").success);
+        EXPECT_EQ(controller_->GetState(), "enabling");
+        feedback_.controlActive = true;
+        controller_->SetFeedback(feedback_, currentTime_);
+        controller_->Run(currentTime_);
+        ASSERT_EQ(controller_->GetState(), "idle");
+    }
+
+    std::unique_ptr<fer::TaskPriorityController> controller_;
+    libconfig::Config configuration_;
+    std::vector<std::string> configurationFiles_;
+    fer::RobotFeedback feedback_;
+    double currentTime_ = 1.0;
 };
 
-TEST_F(ControllerTest, RequiresExplicitEnableAndDriverAcknowledgement) {
-  EXPECT_FALSE(send(fer::commands::Type::Park).success);
-  enable();
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_TRUE(send(fer::commands::Type::Disable).success);
-  EXPECT_FALSE(controller.enabled());
+TEST_F(ControllerTest, LoadsRealTaskPriorityArchitecture)
+{
+    EXPECT_EQ(controller_->GetTasksMap().size(), 7u);
+    auto manager = controller_->GetActionManager();
+    EXPECT_EQ(manager->GetHierarchy().size(), 5u);
+    EXPECT_EQ(manager->CurrentActionID(), "Idle");
+    EXPECT_EQ(manager->GetAction("MoveTool")->PriorityLevels().front()->ID(), "PL_Safety");
+    EXPECT_EQ(controller_->GetConfiguration().saturationMax.size(), 7);
 }
-TEST_F(ControllerTest, RejectsMalformedCommandsWithoutChangingState) {
-  enable();
-  fer::commands::Command c; c.type = fer::commands::Type::SingleJointPosition;
-  c.joints = {.1}; c.joint_index = -1;
-  EXPECT_FALSE(controller.execute(c, time).success);
-  c.joint_index = 7; EXPECT_FALSE(controller.execute(c, time).success);
-  c.joint_index = 0; c.joints = {std::numeric_limits<double>::quiet_NaN()};
-  EXPECT_FALSE(controller.execute(c, time).success);
-  c.joints = {100.}; EXPECT_FALSE(controller.execute(c, time).success);
-  c.joints = {.1}; c.valid_move_type = false;
-  EXPECT_FALSE(controller.execute(c, time).success);
-  EXPECT_EQ(controller.state(), fer::states::State::Idle);
+
+TEST_F(ControllerTest, RejectsUnknownTaskAndPriorityLevel)
+{
+    configuration_.lookup("priorityLevels")[0]["tasks"][0] = "UnknownTask";
+    EXPECT_THROW(MakeController(), std::invalid_argument);
+    configuration_.lookup("priorityLevels")[0]["tasks"][0] = "JointsLimit";
+    configuration_.lookup("actions")[0]["levels"][0] = "UnknownLevel";
+    EXPECT_THROW(MakeController(), std::invalid_argument);
 }
-TEST_F(ControllerTest, RelativeSingleJointTargetAndVelocityBounds) {
-  enable();
-  fer::commands::Command c; c.type = fer::commands::Type::SingleJointPosition;
-  c.joint_index = 1; c.relative = true; c.joints = {.1};
-  ASSERT_TRUE(controller.execute(c, time).success);
-  const auto output = controller.update(time);
-  EXPECT_NEAR(output.velocity[1], .15, 1e-8);
-  EXPECT_LE(output.velocity.cwiseAbs().maxCoeff(), .35);
+
+TEST_F(ControllerTest, RejectsDuplicatePrioritiesAndInvalidJointDimensions)
+{
+    configuration_.lookup("priorityLevels")[1]["name"] = "PL_Safety";
+    EXPECT_THROW(MakeController(), std::invalid_argument);
+    configuration_.lookup("priorityLevels")[1]["name"] = "PL_MoveJointsPosition";
+    configuration_.lookup("tasks.JointsLimit.activationStartDistanceGreaterThanParams").remove(6);
+    EXPECT_THROW(MakeController(), std::invalid_argument);
 }
-TEST_F(ControllerTest, StaleFeedbackStopsAndDoesNotRestart) {
-  enable();
-  ASSERT_TRUE(send(fer::commands::Type::Park).success);
-  EXPECT_FALSE(controller.update(time).velocity.isZero());
-  time += .3;
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Disabled);
-  controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_FALSE(controller.enabled());
-  EXPECT_TRUE(send(fer::commands::Type::Stop).success);
+
+TEST_F(ControllerTest, RequiresExplicitEnableAndDriverAcknowledgement)
+{
+    EXPECT_FALSE(SendCommand("park").success);
+    Enable();
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_TRUE(SendCommand("disable").success);
+    EXPECT_FALSE(controller_->IsEnabled());
 }
-TEST_F(ControllerTest, VelocityCommandsExpire) {
-  enable();
-  fer::commands::Command c; c.type = fer::commands::Type::SingleJointVelocity;
-  c.joint_index = 0; c.joints = {.1};
-  ASSERT_TRUE(controller.execute(c, time).success);
-  EXPECT_NEAR(controller.update(time).velocity[0], .1, 1e-12);
-  time += .31; controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Idle);
+
+TEST_F(ControllerTest, RejectsMalformedGoalsWithoutChangingState)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_joint_i_pos";
+    request.jointSetpoint = { 0.1 };
+    request.jointIndex = -1;
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+    request.jointIndex = 7;
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+    request.jointIndex = 0;
+    request.jointSetpoint = { std::numeric_limits<double>::quiet_NaN() };
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+    request.jointSetpoint = { 100.0 };
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+    request.jointSetpoint = { 0.1 };
+    request.moveType = "invalid";
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_EQ(controller_->GetState(), "idle");
 }
-TEST_F(ControllerTest, DriverFaultNeedsRecoveryAndExplicitEnable) {
-  enable();
-  f.error = true; controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Fault);
-  EXPECT_FALSE(send(fer::commands::Type::Enable).success);
-  ASSERT_TRUE(send(fer::commands::Type::Recover).success);
-  EXPECT_FALSE(send(fer::commands::Type::Enable).success);
-  f.error = false; f.active = false; controller.feedback(f, time);
-  EXPECT_EQ(controller.state(), fer::states::State::Disabled);
-  EXPECT_TRUE(send(fer::commands::Type::Enable).success);
+
+TEST_F(ControllerTest, ConfiguredTaskGainChangesSolverOutput)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_joint_i_pos";
+    request.jointSetpoint = { 0.1 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    double originalVelocity = controller_->Run(currentTime_).jointVelocity[0];
+    EXPECT_GT(originalVelocity, 0.05);
+
+    configuration_.lookup("tasks.JointsPosition.gain") = 0.1;
+    controller_ = MakeController();
+    feedback_.controlActive = false;
+    controller_->SetFeedback(feedback_, currentTime_);
+    Enable();
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    double reducedVelocity = controller_->Run(currentTime_).jointVelocity[0];
+    EXPECT_GT(reducedVelocity, 0.0);
+    EXPECT_LT(reducedVelocity, originalVelocity * 0.2);
 }
-TEST_F(ControllerTest, EnableTimesOut) {
-  ASSERT_TRUE(send(fer::commands::Type::Enable).success);
-  time += 5.1; controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Fault);
+
+TEST_F(ControllerTest, ConfiguredTaskEnableChangesSolverOutput)
+{
+    configuration_.lookup("tasks.JointsPosition.enable") = false;
+    controller_ = MakeController();
+    controller_->SetFeedback(feedback_, currentTime_);
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_joint_i_pos";
+    request.jointSetpoint = { 0.1 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero(1e-8));
 }
-TEST_F(ControllerTest, ParksAndRequiresUnpark) {
-  enable(); ASSERT_TRUE(send(fer::commands::Type::Park).success);
-  f.q = fer::Configuration().parked; controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Parked);
-  EXPECT_TRUE(send(fer::commands::Type::Stop).success);
-  EXPECT_EQ(controller.state(), fer::states::State::Parked);
-  fer::commands::Command c; c.type = fer::commands::Type::SingleJointVelocity; c.joints = {.1};
-  EXPECT_FALSE(controller.execute(c, time).success);
-  EXPECT_TRUE(send(fer::commands::Type::Unpark).success);
+
+TEST_F(ControllerTest, JointLimitTaskHonorsItsEnableFlag)
+{
+    configuration_.lookup("tasks.JointsLimit.enable") = false;
+    controller_ = MakeController();
+    EXPECT_FALSE(controller_->GetTasksMap().at("JointsLimit").task->Enabled());
 }
-TEST_F(ControllerTest, StopCancelsPendingEnable) {
-  ASSERT_TRUE(send(fer::commands::Type::Enable).success);
-  ASSERT_TRUE(send(fer::commands::Type::Stop).success);
-  EXPECT_FALSE(controller.enabled());
-  f.active = true; controller.feedback(f, time);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
-  EXPECT_EQ(controller.state(), fer::states::State::Disabled);
+
+TEST_F(ControllerTest, SafetyPlanePushesTowardConfiguredSafeSide)
+{
+    for (double signedDistance : { 0.03, 0.0, -0.02 }) {
+        double toolHeight = feedback_.toolFrame.translation().z();
+        configuration_.lookup("obstacles")[0]["offset"] = signedDistance - toolHeight;
+        controller_ = MakeController();
+        feedback_.controlActive = false;
+        controller_->SetFeedback(feedback_, currentTime_);
+        Enable();
+        fer::CommandRequest request;
+        request.commandType = "move_joint_i_vel";
+        request.jointSetpoint = { 0.0 };
+        ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+        fer::ControlOutput output = controller_->Run(currentTime_);
+        ASSERT_TRUE(output.jointVelocity.allFinite());
+        EXPECT_GT((feedback_.toolJacobian * output.jointVelocity)[2], 0.0);
+    }
 }
-TEST_F(ControllerTest, JointLimitDamperBlocksOutwardMotionAndAllowsRetreat) {
-  enable(); f.q[0] = fer::kUpper[0] - .05; controller.feedback(f, time);
-  fer::commands::Command c; c.type = fer::commands::Type::SingleJointVelocity;
-  c.joints = {.1};
-  ASSERT_TRUE(controller.execute(c, time).success);
-  const auto output = controller.update(time);
-  EXPECT_NEAR(output.velocity[0], 0., 1e-12);
-  EXPECT_TRUE(output.joint_limit_active);
-  c.joints = {-.1}; ASSERT_TRUE(controller.execute(c, time).success);
-  EXPECT_NEAR(controller.update(time).velocity[0], -.1, 1e-12);
+
+TEST_F(ControllerTest, ConfiguredPriorityOrderResolvesConflictingTasks)
+{
+    // Activate posture and position together, with posture at the higher priority.
+    configuration_.lookup("priorityLevels")[1]["tasks"][0] = "JointsPosture";
+    configuration_.lookup("priorityLevels")[4]["tasks"][0] = "JointsPosition";
+    configuration_.lookup("actions")[2]["levels"].add(libconfig::Setting::TypeString) = "PL_Posture";
+    controller_ = MakeController();
+    controller_->SetFeedback(feedback_, currentTime_);
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_joint_i_pos";
+    request.jointSetpoint = { 0.1 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_LT(controller_->Run(currentTime_).jointVelocity.norm(), 1e-5);
 }
-TEST_F(ControllerTest, RelativeCartesianFramesHaveDefinedSemantics) {
-  enable();
-  fer::commands::Command c; c.type = fer::commands::Type::Cartesian;
-  c.relative = true; c.xyz = {0., 0., .01}; c.frame = 0;
-  ASSERT_TRUE(controller.execute(c, time).success);
-  EXPECT_LT((controller.target().translation() - f.tool.translation() - f.tool.linear() * c.xyz).norm(), 1e-12);
-  c.frame = 1; ASSERT_TRUE(controller.execute(c, time).success);
-  EXPECT_LT((controller.target().translation() - f.tool.translation() - c.xyz).norm(), 1e-12);
-  c.relative = false; c.frame = 0;
-  EXPECT_FALSE(controller.execute(c, time).success);
+
+TEST_F(ControllerTest, StaleFeedbackStopsAndDoesNotRestart)
+{
+    Enable();
+    ASSERT_TRUE(SendCommand("park").success);
+    EXPECT_GT(controller_->Run(currentTime_).jointVelocity.norm(), 0.0);
+    currentTime_ += 0.3;
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "disabled");
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_TRUE(SendCommand("stop").success);
 }
-TEST_F(ControllerTest, CartesianLoopConvergesWithSevenJointModel) {
-  enable();
-  fer::commands::Command c; c.type = fer::commands::Type::Cartesian;
-  c.relative = true; c.frame = 1; c.xyz = {.02, .01, .01};
-  ASSERT_TRUE(controller.execute(c, time).success);
-  for (int i = 0; i < 1500 && controller.state() != fer::states::State::Idle; ++i) {
-    const auto output = controller.update(time);
-    EXPECT_TRUE(output.velocity.allFinite());
-    EXPECT_LE(output.velocity.cwiseAbs().maxCoeff(), .350000001);
-    f.dq = output.velocity; f.q += f.dq * .01;
-    const auto model = fer::PandaModel().evaluate(f.q);
-    f.tool = model.tool; f.jacobian = model.jacobian;
-    time += .01; controller.feedback(f, time);
-  }
-  EXPECT_EQ(controller.state(), fer::states::State::Idle);
-  EXPECT_LT(fer::pose_error(f.tool, controller.target()).head<3>().norm(), .0021);
+
+TEST_F(ControllerTest, VelocityCommandsExpire)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_joint_i_vel";
+    request.jointSetpoint = { 0.1 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_NEAR(controller_->Run(currentTime_).jointVelocity[0], 0.1, 1e-4);
+    currentTime_ += 0.31;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "idle");
 }
-TEST_F(ControllerTest, InvalidFeedbackImmediatelyFaults) {
-  enable(); f.q[0] = std::numeric_limits<double>::infinity();
-  EXPECT_FALSE(controller.feedback(f, time));
-  EXPECT_EQ(controller.state(), fer::states::State::Fault);
-  EXPECT_TRUE(controller.update(time).velocity.isZero());
+
+TEST_F(ControllerTest, FaultNeedsRecoveryAndExplicitEnable)
+{
+    Enable();
+    feedback_.hasError = true;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "fault");
+    EXPECT_FALSE(SendCommand("enable").success);
+    feedback_.controlActive = false;
+    controller_->SetFeedback(feedback_, currentTime_);
+    ASSERT_TRUE(SendCommand("recover").success);
+    EXPECT_FALSE(SendCommand("enable").success);
+    feedback_.hasError = false;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabled");
+    EXPECT_TRUE(SendCommand("enable").success);
 }
-TEST(ControllerConfiguration, RejectsInvalidPosturesAndParameters) {
-  fer::Configuration config; config.parked.setZero();
-  EXPECT_THROW(fer::Controller c(config), std::invalid_argument);
-  config = {}; config.damping = 0.;
-  EXPECT_THROW(fer::Controller c(config), std::invalid_argument);
+
+TEST_F(ControllerTest, EnableTimesOutAndStopCancelsPendingEnable)
+{
+    ASSERT_TRUE(SendCommand("enable").success);
+    ASSERT_TRUE(SendCommand("stop").success);
+    EXPECT_FALSE(controller_->IsEnabled());
+    ASSERT_TRUE(SendCommand("enable").success);
+    currentTime_ += 5.1;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "fault");
 }
-}  // namespace
+
+TEST_F(ControllerTest, ParksAndRequiresUnpark)
+{
+    Enable();
+    ASSERT_TRUE(SendCommand("park").success);
+    feedback_.jointPosition = controller_->GetConfiguration().parkedJointsPos;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "parked");
+    EXPECT_TRUE(SendCommand("stop").success);
+    EXPECT_EQ(controller_->GetState(), "parked");
+    EXPECT_FALSE(SendCommand("move_joints_pos").success);
+    EXPECT_TRUE(SendCommand("unpark").success);
+}
+
+TEST_F(ControllerTest, RelativeCartesianFramesHaveDefinedSemantics)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_cartesian";
+    request.moveType = "relative";
+    request.frameType = 0;
+    request.targetPosition = { 0.0, 0.0, 0.01 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    fer::Pose expected = feedback_.toolFrame * fer::MakePose(request.targetPosition, Eigen::Vector3d::Zero());
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.matrix() - expected.matrix()).norm(), 1e-12);
+    request.frameType = 1;
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.translation()
+                  - feedback_.toolFrame.translation() - request.targetPosition)
+                  .norm(),
+        1e-12);
+}
+
+TEST_F(ControllerTest, CartesianLoopConvergesThroughRealTPIKSolver)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_cartesian";
+    request.moveType = "relative";
+    request.targetPosition = { 0.02, 0.01, 0.01 };
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    for (int step = 0; step < 2000 && controller_->GetState() != "idle"; ++step) {
+        fer::ControlOutput output = controller_->Run(currentTime_);
+        ASSERT_TRUE(output.jointVelocity.allFinite());
+        EXPECT_LE(output.jointVelocity.cwiseAbs().maxCoeff(), 0.350001);
+        feedback_.jointVelocity = output.jointVelocity;
+        feedback_.jointPosition += output.jointVelocity * 0.01;
+        auto kinematics = fer::PandaModel().ComputeKinematics(feedback_.jointPosition);
+        feedback_.toolFrame = kinematics.toolFrame;
+        feedback_.toolJacobian = kinematics.toolJacobian;
+        currentTime_ += 0.01;
+        controller_->SetFeedback(feedback_, currentTime_);
+    }
+    EXPECT_EQ(controller_->GetState(), "idle");
+    EXPECT_LT(fer::CartesianError(feedback_.toolFrame, controller_->GetRobotInfo().cartesianGoalFrame)
+                  .head<3>()
+                  .norm(),
+        0.0021);
+}
+
+TEST_F(ControllerTest, InvalidFeedbackFaultsImmediately)
+{
+    Enable();
+    feedback_.jointPosition[0] = std::numeric_limits<double>::infinity();
+    EXPECT_FALSE(controller_->SetFeedback(feedback_, currentTime_));
+    EXPECT_EQ(controller_->GetState(), "fault");
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+}
+
+}

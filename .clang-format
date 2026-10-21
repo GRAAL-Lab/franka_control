@@ -1,0 +1,14 @@
+BasedOnStyle: WebKit
+IndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: None
+BreakBeforeBraces: WebKit
+BreakConstructorInitializers: BeforeComma
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+ColumnLimit: 110
+PointerAlignment: Left
+SortIncludes: Never
+InsertBraces: true
