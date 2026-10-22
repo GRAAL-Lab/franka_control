@@ -53,10 +53,16 @@ private:
      * fresh.
      */
     void ProcessToolCommand(bool feedbackFresh);
-    /** @brief Publish the arm line, base, joints, configured planes and joint TF frames. */
+    /** @brief Publish base-frame geometry and the serial TF chain from the base through joints 1..7. */
     void PublishMarkers();
-    /** @brief Broadcast a transform from the configured base frame to childFrame using the node timestamp. */
-    void PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& childFrame);
+    /**
+     * @brief Broadcast a child-to-parent RML transform using the current node timestamp.
+     * @param frame Child frame pose expressed in parentFrame.
+     * @param parentFrame Parent ROS TF frame identifier.
+     * @param childFrame Child ROS TF frame identifier.
+     */
+    void PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& parentFrame,
+        const std::string& childFrame);
     /** @brief Create the interactive translation/rotation controls at the given base-frame tool pose. */
     void CreateToolControlMarker(const geometry_msgs::msg::Pose& pose);
     /**

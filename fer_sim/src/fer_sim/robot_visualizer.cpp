@@ -192,11 +192,12 @@ void RobotVisualizer::PublishMarkers()
     marker.color.b = 0.9;
     marker.color.a = 1.0;
     marker.lifetime.nanosec = 500000000;
+    const std::string modelJointPrefix = model_.ID() + rml::FrameID::Joint;
     std::array<Eigen::TransformationMatrix, ARM_JOINTS> jointFrames;
     marker.points.emplace_back();
     for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
         auto& jointFrame = jointFrames[joint];
-        jointFrame = model_.TransformationMatrix(model_.ID() + rml::FrameID::Joint + std::to_string(joint));
+        jointFrame = model_.TransformationMatrix(modelJointPrefix + std::to_string(joint));
         geometry_msgs::msg::Point point;
         point.x = jointFrame.TranslationVector().x();
         point.y = jointFrame.TranslationVector().y();
@@ -233,7 +234,16 @@ void RobotVisualizer::PublishMarkers()
         jointMarker.color.a = 1.0;
         jointMarker.lifetime = marker.lifetime;
         markers.markers.push_back(jointMarker);
-        PublishToTF(jointFrames[joint], jointFramePrefix_ + std::to_string(joint + 1));
+
+        // Geometry stays in the base frame; TF expresses each joint in its parent's frame.
+        std::string parentFrame = baseFrame_;
+        Eigen::TransformationMatrix parentToJoint = jointFrames[joint];
+        if (joint > 0) {
+            parentFrame = jointFramePrefix_ + std::to_string(joint);
+            parentToJoint = model_.TransformationMatrix(modelJointPrefix + std::to_string(joint - 1),
+                modelJointPrefix + std::to_string(joint));
+        }
+        PublishToTF(parentToJoint, parentFrame, jointFramePrefix_ + std::to_string(joint + 1));
     }
     for (auto plane : planeMarkers_) {
         plane.header.stamp = marker.header.stamp;
@@ -243,11 +253,12 @@ void RobotVisualizer::PublishMarkers()
     visualizationPub_->publish(markers);
 }
 
-void RobotVisualizer::PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& childFrame)
+void RobotVisualizer::PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& parentFrame,
+    const std::string& childFrame)
 {
     geometry_msgs::msg::TransformStamped transform;
     transform.header.stamp = now();
-    transform.header.frame_id = baseFrame_;
+    transform.header.frame_id = parentFrame;
     transform.child_frame_id = childFrame;
     transform.transform.translation.x = frame.TranslationVector().x();
     transform.transform.translation.y = frame.TranslationVector().y();
@@ -328,7 +339,7 @@ void RobotVisualizer::HandleToolControlFeedback(
         commandRequest_.target_position
             = { pose.TranslationVector().x(), pose.TranslationVector().y(), pose.TranslationVector().z() };
         commandRequest_.target_orientation = { rpy.Roll(), rpy.Pitch(), rpy.Yaw() };
-        PublishToTF(controlFramePose_, controlFrame_);
+        PublishToTF(controlFramePose_, baseFrame_, controlFrame_);
         dragging_ = feedback->event_type == Feedback::POSE_UPDATE;
         commandQueued_ = feedback->event_type == Feedback::MOUSE_UP;
         if (commandQueued_) {

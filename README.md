@@ -273,8 +273,10 @@ and middle-drag or Shift+left-drag to pan. Select **Move Camera** to navigate
 even when the pointer is over a marker. Camera navigation does not require
 the robot controller to be enabled.
 
-The visualizer publishes `panda_joint1` through `panda_joint7` TFs and a
-`ctrl_frame` preview while dragging. During Cartesian motion, the kinematic
+The visualizer publishes the TF chain
+`panda_link0 -> panda_joint1 -> ... -> panda_joint7`, with each joint transform
+relative to its predecessor, and a base-relative `ctrl_frame` preview while dragging.
+During Cartesian motion, the kinematic
 controller publishes the configured `goal_frame` (default `goal`) alongside the
 measured tool frame. RViz topics are relative to the selected ROS namespace.
 

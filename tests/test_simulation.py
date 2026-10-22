@@ -21,6 +21,7 @@ from rcl_interfaces.srv import GetParameters
 from visualization_msgs.msg import InteractiveMarkerFeedback, InteractiveMarkerUpdate, Marker, MarkerArray
 from visualization_msgs.srv import GetInteractiveMarkers
 from tf2_msgs.msg import TFMessage
+from tf2_ros import Buffer
 
 
 class SimulationTest(unittest.TestCase):
@@ -44,6 +45,7 @@ class SimulationTest(unittest.TestCase):
         self.marker = None
         self.markers = None
         self.transforms = {}
+        self.tf_buffer = Buffer()
         self.dynamic = None
         self.action = None
         self.joint_task = None
@@ -84,6 +86,7 @@ class SimulationTest(unittest.TestCase):
     def tf_callback(self, message):
         for transform in message.transforms:
             self.transforms[transform.child_frame_id] = transform
+            self.tf_buffer.set_transform(transform, 'simulation_test')
 
     def dynamic_callback(self, message):
         self.dynamic = message
@@ -449,15 +452,30 @@ class SimulationTest(unittest.TestCase):
         self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
                     '-r', f'__ns:={self.namespace}', '-p', 'isSim:=true'])
         self.until(lambda: self.markers is not None
-                   and all(f'panda_joint{joint}' in self.transforms for joint in range(1, 8)))
+                   and all(f'panda_joint{joint}' in self.transforms for joint in range(1, 8))
+                   and self.tf_buffer.can_transform('panda_link0', 'panda_joint7', rclpy.time.Time()))
         joints = [marker for marker in self.markers.markers if marker.ns == 'manipulator_joints']
         self.assertEqual(len(joints), 7)
         self.assertTrue(any(marker.ns == 'manipulator_base' for marker in self.markers.markers))
         planes = [marker for marker in self.markers.markers if marker.ns == 'avoidance_planes']
         self.assertEqual(len(planes), 1)
         self.assertAlmostEqual(planes[0].pose.position.z, 0.1)
-        for joint in range(1, 8):
-            self.assertEqual(self.transforms[f'panda_joint{joint}'].header.frame_id, 'panda_link0')
+        # Check the topology and let tf2 compose the relative transforms back into
+        # the base frame. They must agree with the independently published geometry.
+        for marker in joints:
+            joint = marker.id + 1
+            parent = 'panda_link0' if joint == 1 else f'panda_joint{joint - 1}'
+            self.assertEqual(self.transforms[f'panda_joint{joint}'].header.frame_id, parent)
+            composed = self.tf_buffer.lookup_transform(
+                'panda_link0', f'panda_joint{joint}', rclpy.time.Time()).transform
+            for axis in ('x', 'y', 'z'):
+                self.assertAlmostEqual(getattr(composed.translation, axis),
+                                       getattr(marker.pose.position, axis), delta=1e-6)
+            expected = marker.pose.orientation
+            orientation = composed.rotation
+            quaternion_dot = (orientation.x * expected.x + orientation.y * expected.y
+                              + orientation.z * expected.z + orientation.w * expected.w)
+            self.assertAlmostEqual(abs(quaternion_dot), 1.0, delta=1e-6)
 
         response = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
         self.assertEqual(len(response.markers), 1)

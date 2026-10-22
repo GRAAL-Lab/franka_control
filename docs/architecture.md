@@ -223,8 +223,10 @@ periodic `Run`, `ProcessToolCommand` and `PublishMarkers` functions.
 `CreateToolControlMarker` builds the controls and `HandleToolControlFeedback`
 handles drag events.
 Pose updates publish the `ctrl_frame` preview; mouse release queues a Cartesian
-service request. No commands are sent while dragging. Joint-frame TFs use the
-Panda model and the measured tool transform comes from feedback. Plane markers
+service request. No commands are sent while dragging. Joint-frame TFs form a
+serial chain from the base through joints 1 to 7, using RML parent-to-child
+transforms. Display geometry stays in the base frame, and the measured tool
+transform comes from feedback. Plane markers
 use the same normal/offset geometry as the selected KCL configuration.
 
 `FrankaTCPBridge` contains an `ArmCommandParser` and independent 100 Hz command
