@@ -32,6 +32,7 @@ Visualization Manager:
       Enabled: true
       Name: Arm, joints, base and avoidance planes
       Namespaces:
+        avoidance_plane_labels: true
         avoidance_planes: true
         fer_arm: true
         manipulator_base: true
@@ -59,11 +60,7 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        ctrl_frame:
-          Value: true
         fer_tool:
-          Value: true
-        goal:
           Value: true
         panda_joint1:
           Value: true
@@ -88,11 +85,7 @@ Visualization Manager:
       Show Names: false
       Tree:
         panda_link0:
-          ctrl_frame:
-            {}
           fer_tool:
-            {}
-          goal:
             {}
           panda_joint1:
             panda_joint2:
@@ -147,7 +140,7 @@ Window Geometry:
   Height: 810
   Hide Left Dock: false
   Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd000000010000000000000156000002ccfc0200000001fb000000100044006900730070006c006100790073010000003f000002cc000000cc00ffffff000004e6000002cc00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
-  Width: 1602
-  X: 166
-  Y: 132
+  QMainWindow State: 000000ff00000000fd000000010000000000000156000002ccfc0200000001fb000000100044006900730070006c006100790073010000003f000002cc000000cc00ffffff000003ab000002cc00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Width: 1287
+  X: 579
+  Y: 134
