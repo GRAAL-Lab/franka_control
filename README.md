@@ -273,6 +273,11 @@ and middle-drag or Shift+left-drag to pan. Select **Move Camera** to navigate
 even when the pointer is over a marker. Camera navigation does not require
 the robot controller to be enabled.
 
+Interactive marker updates use `interactive_marker_rate` in
+`fer_ctrl/conf/controller.yaml` (default 20 Hz, range 1..30 Hz) on a wall timer,
+so accelerated simulation cannot overrun RViz's 30 FPS marker subscription.
+Physics, controller timing, watchdogs and TF timestamps still use the selected ROS clock.
+
 The visualizer publishes the TF chain
 `panda_link0 -> panda_joint1 -> ... -> panda_joint7`, with each joint transform
 relative to its predecessor, and a base-relative `ctrl_frame` preview while dragging.

@@ -38,7 +38,9 @@ The simulator owns `/clock`. Its wall timer advances one fixed simulation step;
 `simTimeScale` changes the wall period. `UpdateControlState` evaluates its
 watchdog and lifecycle transitions, and `AdvanceArm` subdivides the physics step
 into intervals of at most 1 ms. Both physics and gripper motion use simulated
-seconds. Controller, visualizer and bridge timers use the ROS node clock.
+seconds. Controller, visualization geometry/TF and bridge timers use the ROS node
+clock. Interactive marker delivery uses a separate wall timer at
+`interactive_marker_rate` to stay below RViz's display cadence.
 
 `TaskPriorityController` receives time from its caller. With simulation enabled,
 each `Run` or `ExecuteCommand` forwards seconds as milliseconds to TPIK's

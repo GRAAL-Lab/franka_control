@@ -43,11 +43,13 @@ private:
     void HandleStateData(const fer_msgs::msg::StateData& message);
     /** @brief Cache the controller state and current goal for interactive marker synchronization. */
     void HandleControlData(const fer_msgs::msg::ControlData& message);
-    /**
-     * @brief Process tool commands and render fresh feedback; publish interactive poses only when changed.
-     * @details Apply pending drag feedback even when no programmatic pose update is needed.
-     */
+    /** @brief Process tool commands and publish fresh geometry and TF using the selected node clock. */
     void Run();
+    /**
+     * @brief Synchronize and flush interactive marker poses at a bounded wall-clock display rate.
+     * @details Apply drag feedback while preserving the user's pose during a drag or pending command.
+     */
+    void UpdateToolControlMarker();
     /**
      * @brief Collect or expire the outstanding tool command and send a queued goal when feedback is
      * fresh.
@@ -76,6 +78,7 @@ private:
     std::string jointFramePrefix_;
     std::string controlFrame_;
     double loopRate_ = 100.0;
+    double interactiveMarkerRate_ = 20.0;
     double lastFeedbackTime_ = 0.0;
     double commandSendTime_ = 0.0;
     bool receivingFeedback_ = false;
@@ -92,6 +95,7 @@ private:
     std::unique_ptr<tf2_ros::TransformBroadcaster> tfPublisher_;
     CommandClient::SharedPtr controlCommandClient_;
     rclcpp::TimerBase::SharedPtr runTimer_;
+    rclcpp::TimerBase::SharedPtr interactiveMarkerTimer_;
     rclcpp::Subscription<fer_msgs::msg::StateData>::SharedPtr stateDataSub_;
     rclcpp::Subscription<fer_msgs::msg::ControlData>::SharedPtr controlDataSub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr markerPub_;

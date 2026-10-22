@@ -3,3 +3,8 @@
     base_frame: panda_link0
     tool_frame: fer_tool
     goal_frame: goal
+
+/**/visualizer_node:
+  ros__parameters:
+    # Wall-clock Hz, below the configured 30 FPS RViz display cadence.
+    interactive_marker_rate: 20.0

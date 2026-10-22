@@ -4,6 +4,7 @@
 
 #include <ctrl_toolbox_internal/Futils.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <chrono>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <libconfig.h++>
 #include <future>
@@ -28,8 +29,13 @@ void RobotVisualizer::LoadConfiguration()
     jointFramePrefix_ = declare_parameter("joint_frame_prefix", "panda_joint");
     controlFrame_ = declare_parameter("control_frame", "ctrl_frame");
     loopRate_ = declare_parameter("loop_rate", 100.0);
+    interactiveMarkerRate_ = declare_parameter("interactive_marker_rate", 20.0);
     if (!std::isfinite(loopRate_) || loopRate_ < 1.0 || loopRate_ > 1000.0) {
         throw std::invalid_argument("Visualizer loop_rate must be in 1..1000 Hz");
+    }
+    if (!std::isfinite(interactiveMarkerRate_) || interactiveMarkerRate_ < 1.0
+        || interactiveMarkerRate_ > 30.0) {
+        throw std::invalid_argument("interactive_marker_rate must be in 1..30 Hz");
     }
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/kcl_fer.conf";
     LoadObstacleMarkers(declare_parameter("configuration_file", defaultFile));
@@ -98,10 +104,14 @@ void RobotVisualizer::InitializeROSInterfaces()
         rclcpp::QoS(1).reliable(), std::bind(&RobotVisualizer::HandleControlData, this, _1));
     controlCommandClient_ = create_client<fer_msgs::srv::ControlCommand>(topicnames::control_command);
     interactiveMarkerServer_
-        = std::make_unique<interactive_markers::InteractiveMarkerServer>("tool_control", this);
+        = std::make_unique<interactive_markers::InteractiveMarkerServer>(
+            "tool_control", this, rclcpp::QoS(100).reliable(), rclcpp::QoS(100).reliable());
     tfPublisher_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     runTimer_ = rclcpp::create_timer(this, get_clock(),
         rclcpp::Duration::from_seconds(1.0 / loopRate_), std::bind(&RobotVisualizer::Run, this));
+    // RViz drains marker updates at its display cadence, independently of simulation speed.
+    interactiveMarkerTimer_ = create_wall_timer(std::chrono::duration<double>(1.0 / interactiveMarkerRate_),
+        std::bind(&RobotVisualizer::UpdateToolControlMarker, this));
 }
 
 void RobotVisualizer::HandleStateData(const fer_msgs::msg::StateData& message)
@@ -147,6 +157,13 @@ void RobotVisualizer::Run()
         return;
     }
     PublishMarkers();
+}
+
+void RobotVisualizer::UpdateToolControlMarker()
+{
+    if (!receivingFeedback_ || now().seconds() - lastFeedbackTime_ > 0.2) {
+        return;
+    }
     if (!dragging_ && !commandQueued_ && !pendingCommand_) {
         const auto pose = controlData_.ctrl_state == "move_cartesian" ? controlData_.target_pose
                                                                       : PoseToMessage(toolFrame_);
