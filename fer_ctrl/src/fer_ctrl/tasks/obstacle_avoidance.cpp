@@ -30,6 +30,7 @@ void ObstacleAvoidance::Update()
 void ObstacleAvoidance::UpdateJacobian()
 {
     Eigen::MatrixXd toolJacobian = robotModel_->CartesianJacobian(toolFrame_);
+    J_.resize(obstacles_.size(), toolJacobian.cols());
     for (std::size_t plane = 0; plane < obstacles_.size(); ++plane) {
         J_.row(plane) = obstacles_[plane].normal.transpose() * toolJacobian.topRows(3);
     }

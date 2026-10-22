@@ -1,4 +1,5 @@
 #include "fer_ctrl/task_priority_controller.hpp"
+#include "fer_msgs/conversions.hpp"
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <limits>
@@ -13,6 +14,7 @@ protected:
         configuration_.readFile(FER_KCL_CONFIG);
         configuration_.lookup("actionTransitionDuration") = 0.0;
         controller_ = MakeController();
+        UpdateKinematics();
         feedback_.connected = true;
         feedback_.ready = true;
         ASSERT_TRUE(controller_->SetFeedback(feedback_, currentTime_));
@@ -41,6 +43,14 @@ protected:
         return controller_->ExecuteCommand(request, currentTime_);
     }
 
+    void UpdateKinematics()
+    {
+        model_.JointsPosition(feedback_.jointPosition);
+        feedback_.toolFrame = model_.TransformationMatrix(model_.ToolFrameID());
+        feedback_.toolJacobian = model_.Jacobian(model_.ToolFrameID());
+        feedback_.flangeToTool = model_.FlangeToTool();
+    }
+
     void Enable()
     {
         ASSERT_TRUE(SendCommand("enable").success);
@@ -59,6 +69,7 @@ protected:
     libconfig::Config configuration_;
     std::vector<std::string> configurationFiles_;
     fer::RobotFeedback feedback_;
+    fer::FrankaArmModel model_;
     double currentTime_ = 1.0;
 };
 
@@ -166,7 +177,7 @@ TEST_F(ControllerTest, JointLimitTaskHonorsItsEnableFlag)
 TEST_F(ControllerTest, SafetyPlanePushesTowardConfiguredSafeSide)
 {
     for (double signedDistance : { 0.03, 0.0, -0.02 }) {
-        double toolHeight = feedback_.toolFrame.translation().z();
+        double toolHeight = feedback_.toolFrame.TranslationVector().z();
         configuration_.lookup("obstacles")[0]["offset"] = signedDistance - toolHeight;
         controller_ = MakeController();
         feedback_.controlActive = false;
@@ -178,6 +189,11 @@ TEST_F(ControllerTest, SafetyPlanePushesTowardConfiguredSafeSide)
         ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
         fer::ControlOutput output = controller_->Run(currentTime_);
         ASSERT_TRUE(output.jointVelocity.allFinite());
+        auto obstacle = std::dynamic_pointer_cast<tpik::ReactiveTask>(
+            controller_->GetTasksMap().at(fer::ID::tasks::obstacleAvoidance).task);
+        EXPECT_NEAR(obstacle->ControlVariable()[0], signedDistance, 1e-10);
+        ASSERT_EQ(obstacle->Jacobian().cols(), static_cast<int>(fer::ARM_JOINTS));
+        EXPECT_LT((obstacle->Jacobian().row(0) - feedback_.toolJacobian.row(2)).norm(), 1e-10);
         EXPECT_GT((feedback_.toolJacobian * output.jointVelocity)[2], 0.0);
     }
 }
@@ -287,14 +303,58 @@ TEST_F(ControllerTest, RelativeCartesianFramesHaveDefinedSemantics)
     request.frameType = 0;
     request.targetPosition = { 0.0, 0.0, 0.01 };
     ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
-    fer::Pose expected = feedback_.toolFrame * fer::MakePose(request.targetPosition, Eigen::Vector3d::Zero());
-    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.matrix() - expected.matrix()).norm(), 1e-12);
+    Eigen::TransformationMatrix expected
+        = feedback_.toolFrame * fer::MakeTransformation(request.targetPosition, {});
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame - expected).norm(), 1e-12);
     request.frameType = 1;
     ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
-    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.translation()
-                  - feedback_.toolFrame.translation() - request.targetPosition)
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.TranslationVector()
+                  - feedback_.toolFrame.TranslationVector() - request.targetPosition)
                   .norm(),
         1e-12);
+}
+
+TEST_F(ControllerTest, RelativeRPYRotationsUseRequestedFrame)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_cartesian";
+    request.moveType = "relative";
+    request.targetOrientation = rml::EulerRPY(0.1, -0.2, 0.3);
+    const auto initialRotation = feedback_.toolFrame.RotationMatrix();
+    const auto requestedRotation = request.targetOrientation.ToRotationMatrix();
+
+    request.frameType = 0;
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.RotationMatrix()
+                  - initialRotation * requestedRotation)
+                  .norm(),
+        1e-12);
+
+    request.frameType = 1;
+    ASSERT_TRUE(controller_->ExecuteCommand(request, currentTime_).success);
+    EXPECT_LT((controller_->GetRobotInfo().cartesianGoalFrame.RotationMatrix()
+                  - requestedRotation * initialRotation)
+                  .norm(),
+        1e-12);
+}
+
+TEST_F(ControllerTest, RejectsNonfiniteRPY)
+{
+    Enable();
+    fer::CommandRequest request;
+    request.commandType = "move_cartesian";
+    request.targetOrientation.Roll(std::numeric_limits<double>::quiet_NaN());
+    EXPECT_FALSE(controller_->ExecuteCommand(request, currentTime_).success);
+}
+
+TEST(MessageConversions, RMLTransformRoundTripsThroughPoseMessage)
+{
+    const rml::EulerRPY orientation(0.2, -0.3, 0.4);
+    const auto frame = fer::MakeTransformation({ 0.1, -0.2, 0.3 }, orientation);
+    const auto restored = fer::MessageToPose(fer::PoseToMessage(frame));
+    EXPECT_LT((restored - frame).norm(), 1e-12);
+    EXPECT_LT((restored.RotationMatrix().ToEulerRPY().ToVector() - orientation.ToVector()).norm(), 1e-12);
 }
 
 TEST_F(ControllerTest, CartesianLoopConvergesThroughRealTPIKSolver)
@@ -312,15 +372,13 @@ TEST_F(ControllerTest, CartesianLoopConvergesThroughRealTPIKSolver)
         EXPECT_LE(output.jointVelocity.cwiseAbs().maxCoeff(), 0.350001);
         feedback_.jointVelocity = output.jointVelocity;
         feedback_.jointPosition += output.jointVelocity * 0.01;
-        auto kinematics = fer::PandaModel().ComputeKinematics(feedback_.jointPosition);
-        feedback_.toolFrame = kinematics.toolFrame;
-        feedback_.toolJacobian = kinematics.toolJacobian;
+        UpdateKinematics();
         currentTime_ += 0.01;
         controller_->SetFeedback(feedback_, currentTime_);
     }
     EXPECT_EQ(controller_->GetState(), "idle");
-    EXPECT_LT(fer::CartesianError(feedback_.toolFrame, controller_->GetRobotInfo().cartesianGoalFrame)
-                  .head<3>()
+    EXPECT_LT(rml::CartesianError(feedback_.toolFrame, controller_->GetRobotInfo().cartesianGoalFrame)
+                  .LinearVector()
                   .norm(),
         0.0021);
 }

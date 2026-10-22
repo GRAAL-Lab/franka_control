@@ -304,9 +304,9 @@ void FrankaDriver::PublishFeedback()
     message.joint_state.position.assign(snapshot.position.begin(), snapshot.position.end());
     message.joint_state.velocity.assign(snapshot.velocity.begin(), snapshot.velocity.end());
     message.joint_state.effort.assign(snapshot.measuredTorque.begin(), snapshot.measuredTorque.end());
-    Pose toolFrame = Pose::Identity();
+    Eigen::TransformationMatrix toolFrame;
     if (snapshot.connected) {
-        toolFrame.matrix() = Eigen::Map<const Eigen::Matrix4d>(snapshot.toolFrame.data());
+        toolFrame = Eigen::Map<const Eigen::Matrix4d>(snapshot.toolFrame.data());
     }
     message.tool_pose = PoseToMessage(toolFrame);
     message.flange_to_tool = snapshot.flangeToTool;

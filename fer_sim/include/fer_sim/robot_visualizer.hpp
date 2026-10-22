@@ -1,7 +1,7 @@
 #ifndef FER_SIM_ROBOT_VISUALIZER_HPP
 #define FER_SIM_ROBOT_VISUALIZER_HPP
 
-#include "fer_model/panda_model.hpp"
+#include "fer_model/franka_arm_model.hpp"
 #include "fer_msgs/msg/state_data.hpp"
 #include "fer_msgs/msg/control_data.hpp"
 #include "fer_msgs/srv/control_command.hpp"
@@ -26,7 +26,7 @@ private:
     void ControlDataCB(const fer_msgs::msg::ControlData& message);
     void Run();
     void PublishMarkers();
-    void PublishToTF(const Pose& frame, const std::string& childFrame);
+    void PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& childFrame);
     void make6DofMarker(const geometry_msgs::msg::Pose& pose);
     void interactiveMarkerCB(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
@@ -40,9 +40,9 @@ private:
     bool receivingFeedback_ = false;
     bool dragging_ = false;
     bool sendCommandToController_ = false;
-    KinematicData kinematics_;
-    Pose toolFrame_ = Pose::Identity();
-    Pose controlFramePose_ = Pose::Identity();
+    FrankaArmModel model_;
+    Eigen::TransformationMatrix toolFrame_;
+    Eigen::TransformationMatrix controlFramePose_;
     fer_msgs::msg::ControlData controlDataMsg_;
     fer_msgs::srv::ControlCommand::Request commandRequest_;
     std::optional<CommandClient::FutureAndRequestId> pendingCommand_;

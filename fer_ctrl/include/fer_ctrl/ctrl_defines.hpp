@@ -1,7 +1,7 @@
 #ifndef FER_CTRL_CTRL_DEFINES_HPP
 #define FER_CTRL_CTRL_DEFINES_HPP
 
-#include "fer_model/panda_model.hpp"
+#include "fer_model/franka_arm_model.hpp"
 #include <libconfig.h++>
 #include <tpik/TPIKlib.h>
 #include <memory>
@@ -41,7 +41,7 @@ struct CommandRequest {
     std::vector<double> jointSetpoint;
     int jointIndex = 0;
     Eigen::Vector3d targetPosition = Eigen::Vector3d::Zero();
-    Eigen::Vector3d targetOrientation = Eigen::Vector3d::Zero();
+    rml::EulerRPY targetOrientation;
     int frameType = 1;
 };
 
@@ -53,9 +53,9 @@ struct CommandResult {
 struct RobotFeedback {
     JointVector jointPosition = HomeJointPosition();
     JointVector jointVelocity = JointVector::Zero();
-    Pose toolFrame = PandaModel().ComputeKinematics(HomeJointPosition()).toolFrame;
-    Pose flangeToTool = PandaModel().FlangeToTool();
-    JacobianMatrix toolJacobian = PandaModel().ComputeKinematics(HomeJointPosition()).toolJacobian;
+    Eigen::TransformationMatrix toolFrame;
+    Eigen::TransformationMatrix flangeToTool;
+    JacobianMatrix toolJacobian = JacobianMatrix::Zero();
     bool connected = false;
     bool ready = false;
     bool controlActive = false;
@@ -99,7 +99,7 @@ struct RobotInfo {
     std::string status = "Waiting for feedback and enable";
     JointVector jointsGoal = HomeJointPosition();
     JointVector velocityGoal = JointVector::Zero();
-    Pose cartesianGoalFrame = Pose::Identity();
+    Eigen::TransformationMatrix cartesianGoalFrame;
     double jointError = 0.0;
     double linearError = 0.0;
     double angularError = 0.0;

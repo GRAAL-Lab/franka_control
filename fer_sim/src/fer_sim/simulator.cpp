@@ -14,7 +14,7 @@ namespace fer {
 
 Simulator::Simulator()
     : Node("simulator_node")
-    , model_(declare_parameter("tool_offset", 0.1034))
+    , model_("Panda", declare_parameter("tool_offset", DEFAULT_TOOL_OFFSET))
 {
     LoadConfiguration();
     dynamicController_ = std::make_unique<DynamicController>(conf_);
@@ -218,8 +218,11 @@ void Simulator::RunDynamicControl(double sampleTime)
 
 void Simulator::PublishState()
 {
-    KinematicData kinematics = model_.ComputeKinematics(jointPosition_);
-    Pose flangeToTool = model_.FlangeToTool();
+    model_.JointsPosition(jointPosition_);
+    model_.JointsVelocity(jointVelocity_);
+    Eigen::TransformationMatrix toolFrame = model_.TransformationMatrix(model_.ToolFrameID());
+    JacobianMatrix toolJacobian = model_.Jacobian(model_.ToolFrameID());
+    const auto& flangeToTool = model_.FlangeToTool();
     fer_msgs::msg::StateData message;
     message.header.stamp = now();
     message.header.frame_id = baseFrame_;
@@ -235,9 +238,9 @@ void Simulator::PublishState()
     message.joint_state.position.assign(jointPosition_.data(), jointPosition_.data() + ARM_JOINTS);
     message.joint_state.velocity.assign(jointVelocity_.data(), jointVelocity_.data() + ARM_JOINTS);
     message.joint_state.effort.assign(commandedTorque_.data(), commandedTorque_.data() + ARM_JOINTS);
-    message.tool_pose = PoseToMessage(kinematics.toolFrame);
-    std::copy_n(kinematics.toolJacobian.data(), 42, message.zero_jacobian.begin());
-    std::copy_n(flangeToTool.matrix().data(), 16, message.flange_to_tool.begin());
+    message.tool_pose = PoseToMessage(toolFrame);
+    std::copy_n(toolJacobian.data(), 42, message.zero_jacobian.begin());
+    std::copy_n(flangeToTool.data(), 16, message.flange_to_tool.begin());
     std::copy_n(massMatrix_.data(), 49, message.mass_matrix.begin());
     std::copy_n(commandedTorque_.data(), ARM_JOINTS, message.commanded_torques.begin());
     stateDataPub_->publish(message);

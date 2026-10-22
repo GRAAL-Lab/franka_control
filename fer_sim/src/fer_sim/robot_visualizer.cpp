@@ -48,10 +48,10 @@ void RobotVisualizer::LoadConfiguration()
         plane.id = index;
         plane.type = plane.CUBE;
         plane.action = plane.ADD;
-        Pose frame = Pose::Identity();
-        frame.translation() = -offset * normal / normal.squaredNorm();
-        frame.linear()
-            = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitZ(), normal).toRotationMatrix();
+        Eigen::TransformationMatrix frame;
+        frame.TranslationVector(-offset * normal / normal.squaredNorm());
+        frame.RotationMatrix(Eigen::RotationMatrix(
+            Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitZ(), normal)));
         plane.pose = PoseToMessage(frame);
         plane.scale.x = plane.scale.y = 1.0;
         plane.scale.z = 0.002;
@@ -94,10 +94,10 @@ void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
 
     try {
         toolFrame_ = MessageToPose(message.tool_pose);
-        if (!toolFrame_.matrix().allFinite()) {
+        if (!toolFrame_.allFinite()) {
             throw std::invalid_argument("Invalid measured tool pose");
         }
-        kinematics_ = PandaModel().ComputeKinematics(jointPosition);
+        model_.JointsPosition(jointPosition);
         if (intMarkerServer_->empty()) {
             make6DofMarker(message.tool_pose);
         }
@@ -173,11 +173,15 @@ void RobotVisualizer::PublishMarkers()
     marker.color.b = 0.9;
     marker.color.a = 1.0;
     marker.lifetime.nanosec = 500000000;
-    for (const Pose& jointFrame : kinematics_.jointFrames) {
+    std::array<Eigen::TransformationMatrix, ARM_JOINTS> jointFrames;
+    marker.points.emplace_back();
+    for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
+        auto& jointFrame = jointFrames[joint];
+        jointFrame = model_.TransformationMatrix(model_.ID() + rml::FrameID::Joint + std::to_string(joint));
         geometry_msgs::msg::Point point;
-        point.x = jointFrame.translation().x();
-        point.y = jointFrame.translation().y();
-        point.z = jointFrame.translation().z();
+        point.x = jointFrame.TranslationVector().x();
+        point.y = jointFrame.TranslationVector().y();
+        point.z = jointFrame.TranslationVector().z();
         marker.points.push_back(point);
     }
     marker.points.push_back(PoseToMessage(toolFrame_).position);
@@ -203,14 +207,14 @@ void RobotVisualizer::PublishMarkers()
         jointMarker.ns = "manipulator_joints";
         jointMarker.id = static_cast<int>(joint);
         jointMarker.type = jointMarker.CYLINDER;
-        jointMarker.pose = PoseToMessage(kinematics_.jointFrames[joint + 1]);
+        jointMarker.pose = PoseToMessage(jointFrames[joint]);
         jointMarker.scale.x = jointMarker.scale.y = 0.075;
         jointMarker.scale.z = 0.03;
         jointMarker.color.r = jointMarker.color.g = jointMarker.color.b = 0.9;
         jointMarker.color.a = 1.0;
         jointMarker.lifetime = marker.lifetime;
         markers.markers.push_back(jointMarker);
-        PublishToTF(kinematics_.jointFrames[joint + 1], jointFramePrefix_ + std::to_string(joint + 1));
+        PublishToTF(jointFrames[joint], jointFramePrefix_ + std::to_string(joint + 1));
     }
     for (auto plane : planeMarkers_) {
         plane.header.stamp = marker.header.stamp;
@@ -220,15 +224,15 @@ void RobotVisualizer::PublishMarkers()
     visualizationPub_->publish(markers);
 }
 
-void RobotVisualizer::PublishToTF(const Pose& frame, const std::string& childFrame)
+void RobotVisualizer::PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& childFrame)
 {
     geometry_msgs::msg::TransformStamped transform;
     transform.header.stamp = now();
     transform.header.frame_id = baseFrame_;
     transform.child_frame_id = childFrame;
-    transform.transform.translation.x = frame.translation().x();
-    transform.transform.translation.y = frame.translation().y();
-    transform.transform.translation.z = frame.translation().z();
+    transform.transform.translation.x = frame.TranslationVector().x();
+    transform.transform.translation.y = frame.TranslationVector().y();
+    transform.transform.translation.z = frame.TranslationVector().z();
     transform.transform.rotation = PoseToMessage(frame).orientation;
     tfPublisher_->sendTransform(transform);
 }
@@ -288,8 +292,8 @@ void RobotVisualizer::interactiveMarkerCB(
         return;
     }
     try {
-        Pose pose = MessageToPose(feedback->pose);
-        if (!pose.matrix().allFinite()) {
+        Eigen::TransformationMatrix pose = MessageToPose(feedback->pose);
+        if (!pose.allFinite()) {
             throw std::invalid_argument("Invalid interactive tool goal");
         }
         if (feedback->event_type == Feedback::MOUSE_DOWN) {
@@ -297,12 +301,12 @@ void RobotVisualizer::interactiveMarkerCB(
             return;
         }
         controlFramePose_ = pose;
-        auto rpy = Eigen::RotationMatrix(pose.linear()).ToEulerRPY();
+        rml::EulerRPY rpy = pose.RotationMatrix().ToEulerRPY();
         commandRequest_.command_type = "move_cartesian";
         commandRequest_.move_type = commandRequest_.ABSMOVE;
         commandRequest_.frame_type = commandRequest_.BASE;
         commandRequest_.target_position
-            = { pose.translation().x(), pose.translation().y(), pose.translation().z() };
+            = { pose.TranslationVector().x(), pose.TranslationVector().y(), pose.TranslationVector().z() };
         commandRequest_.target_orientation = { rpy.Roll(), rpy.Pitch(), rpy.Yaw() };
         PublishToTF(controlFramePose_, controlFrame_);
         dragging_ = feedback->event_type == Feedback::POSE_UPDATE;

@@ -145,11 +145,11 @@ void FrankaTCPBridge::FeedbackLoop()
         report = {};
         report.header = { 0, EFFECTOR_POSITION, sizeof(EffectorPosition) - HEADER_SIZE };
         try {
-            Pose pose = MessageToPose(stateDataMsg_.tool_pose);
-            auto rpy = Eigen::RotationMatrix(pose.linear()).ToEulerRPY();
-            report.effectorPosition.x = pose.translation().x();
-            report.effectorPosition.y = pose.translation().y();
-            report.effectorPosition.z = pose.translation().z();
+            Eigen::TransformationMatrix pose = MessageToPose(stateDataMsg_.tool_pose);
+            rml::EulerRPY rpy = pose.RotationMatrix().ToEulerRPY();
+            report.effectorPosition.x = pose.TranslationVector().x();
+            report.effectorPosition.y = pose.TranslationVector().y();
+            report.effectorPosition.z = pose.TranslationVector().z();
             report.effectorPosition.roll = rpy.Roll();
             report.effectorPosition.pitch = rpy.Pitch();
             report.effectorPosition.yaw = rpy.Yaw();

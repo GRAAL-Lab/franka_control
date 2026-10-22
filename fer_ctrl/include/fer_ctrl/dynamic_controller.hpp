@@ -1,7 +1,7 @@
 #ifndef FER_CTRL_DYNAMIC_CONTROLLER_HPP
 #define FER_CTRL_DYNAMIC_CONTROLLER_HPP
 
-#include "fer_model/panda_model.hpp"
+#include "fer_model/franka_arm_model.hpp"
 #include <string>
 
 namespace fer {

@@ -36,7 +36,7 @@ The simulator uses the same dynamic-controller library.
 | Package | Responsibility |
 | --- | --- |
 | `fer_msgs` | ROS2 commands, feedback, dynamic references, task status and TPIK action messages |
-| `fer_model` | Panda kinematics and `FrankaArmModel`, the RML model used by IKCL |
+| `fer_model` | `FrankaArmModel`, the RML arm model shared by the controller, simulator and visualizer |
 | `fer_ctrl` | Kinematic controller, command/state classes, configuration loaders and dynamic controller |
 | `fer_driver` | libfranka arm torque driver and independent gripper node |
 | `fer_sim` | Joint-dynamics simulator, RViz geometry, joint TFs and interactive tool control |
@@ -128,6 +128,12 @@ ros2 launch fer_bringup fer.launch.py \
 
 The same `dcl_config` is passed to the dynamic node and selected backend.
 Configuration files are loaded at startup; restart the stack after changing them.
+
+The simulator's `tool_offset` parameter sets the flange-to-tool distance in metres.
+It defaults to `fer::DEFAULT_TOOL_OFFSET` in `fer_model/franka_arm_model.hpp`; set
+`tool_offset` in the simulator YAML to override it. All `FrankaArmModel` instances
+use this shared default. The controller takes the actual tool
+transform from driver or simulator feedback.
 
 Hardware:
 

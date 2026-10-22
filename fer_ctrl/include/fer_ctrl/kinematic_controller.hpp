@@ -40,7 +40,8 @@ private:
     void PublishControl(const ControlOutput& output);
     void PublishTasksInfo(const ControlOutput& output);
     void PublishAction();
-    void PublishToTF(const Pose& frame, const std::string& parentFrame, const std::string& childFrame);
+    void PublishToTF(
+        const Eigen::TransformationMatrix& frame, const std::string& parentFrame, const std::string& childFrame);
 
     std::unique_ptr<TaskPriorityController> controller_;
     std::string baseFrame_;

@@ -63,7 +63,7 @@ void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
         feedback.jointPosition = Eigen::Map<const JointVector>(message.joint_state.position.data());
         feedback.jointVelocity = Eigen::Map<const JointVector>(message.joint_state.velocity.data());
         feedback.toolFrame = MessageToPose(message.tool_pose);
-        feedback.flangeToTool.matrix() = Eigen::Map<const Eigen::Matrix4d>(message.flange_to_tool.data());
+        feedback.flangeToTool = Eigen::Map<const Eigen::Matrix4d>(message.flange_to_tool.data());
         feedback.toolJacobian = Eigen::Map<const JacobianMatrix>(message.zero_jacobian.data());
         feedback.connected = message.connected;
         feedback.ready = message.ready;
@@ -106,7 +106,7 @@ void KinematicController::CommandsHandler(fer_msgs::srv::ControlCommand::Request
     command.jointSetpoint = request->joint_setpoint;
     command.jointIndex = request->joint_index;
     command.targetPosition = Eigen::Map<const Eigen::Vector3d>(request->target_position.data());
-    command.targetOrientation = Eigen::Map<const Eigen::Vector3d>(request->target_orientation.data());
+    command.targetOrientation.RPY(Eigen::Map<const Eigen::Vector3d>(request->target_orientation.data()));
     command.frameType = request->frame_type;
     CommandResult result = controller_->ExecuteCommand(command, SteadyTime());
     response->success = result.success;
@@ -229,15 +229,15 @@ void KinematicController::PublishControl(const ControlOutput& output)
 }
 
 void KinematicController::PublishToTF(
-    const Pose& frame, const std::string& parentFrame, const std::string& childFrame)
+    const Eigen::TransformationMatrix& frame, const std::string& parentFrame, const std::string& childFrame)
 {
     geometry_msgs::msg::TransformStamped transform;
     transform.header.stamp = now();
     transform.header.frame_id = parentFrame;
     transform.child_frame_id = childFrame;
-    transform.transform.translation.x = frame.translation().x();
-    transform.transform.translation.y = frame.translation().y();
-    transform.transform.translation.z = frame.translation().z();
+    transform.transform.translation.x = frame.TranslationVector().x();
+    transform.transform.translation.y = frame.TranslationVector().y();
+    transform.transform.translation.z = frame.TranslationVector().z();
     transform.transform.rotation = PoseToMessage(frame).orientation;
     tfPublisher_->sendTransform(transform);
 }

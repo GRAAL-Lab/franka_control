@@ -1,7 +1,7 @@
 #ifndef FER_MSGS_CONVERSIONS_HPP
 #define FER_MSGS_CONVERSIONS_HPP
 
-#include "fer_model/panda_model.hpp"
+#include "fer_model/franka_arm_model.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include <chrono>
 #include <stdexcept>
@@ -14,13 +14,13 @@ inline double SteadyTime()
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-inline geometry_msgs::msg::Pose PoseToMessage(const Pose& frame)
+inline geometry_msgs::msg::Pose PoseToMessage(const Eigen::TransformationMatrix& frame)
 {
     geometry_msgs::msg::Pose message;
-    message.position.x = frame.translation().x();
-    message.position.y = frame.translation().y();
-    message.position.z = frame.translation().z();
-    Eigen::Quaterniond orientation(frame.linear());
+    message.position.x = frame.TranslationVector().x();
+    message.position.y = frame.TranslationVector().y();
+    message.position.z = frame.TranslationVector().z();
+    Eigen::Quaterniond orientation = frame.RotationMatrix().ToQuaternion();
     message.orientation.x = orientation.x();
     message.orientation.y = orientation.y();
     message.orientation.z = orientation.z();
@@ -28,16 +28,16 @@ inline geometry_msgs::msg::Pose PoseToMessage(const Pose& frame)
     return message;
 }
 
-inline Pose MessageToPose(const geometry_msgs::msg::Pose& message)
+inline Eigen::TransformationMatrix MessageToPose(const geometry_msgs::msg::Pose& message)
 {
     Eigen::Quaterniond orientation(
         message.orientation.w, message.orientation.x, message.orientation.y, message.orientation.z);
     if (!orientation.coeffs().allFinite() || std::abs(orientation.norm() - 1.0) > 1e-5) {
         throw std::invalid_argument("Invalid feedback quaternion");
     }
-    Pose frame = Pose::Identity();
-    frame.translation() = Eigen::Vector3d(message.position.x, message.position.y, message.position.z);
-    frame.linear() = orientation.toRotationMatrix();
+    Eigen::TransformationMatrix frame;
+    frame.TranslationVector({ message.position.x, message.position.y, message.position.z });
+    frame.RotationMatrix(Eigen::RotationMatrix(orientation));
     return frame;
 }
 

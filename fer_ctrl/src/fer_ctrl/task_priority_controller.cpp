@@ -158,11 +158,11 @@ void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool sim
 
 bool TaskPriorityController::SetFeedback(const RobotFeedback& feedback, double receiveTime)
 {
-    const Eigen::Matrix3d rotation = feedback.toolFrame.linear();
+    const Eigen::RotationMatrix rotation = feedback.toolFrame.RotationMatrix();
     if (!std::isfinite(receiveTime) || !feedback.jointPosition.allFinite()
-        || !feedback.jointVelocity.allFinite() || !feedback.toolFrame.matrix().allFinite()
-        || !feedback.flangeToTool.matrix().allFinite() || !feedback.toolJacobian.allFinite()
-        || (rotation.transpose() * rotation - Eigen::Matrix3d::Identity()).norm() > 1e-5
+        || !feedback.jointVelocity.allFinite() || !feedback.toolFrame.allFinite()
+        || !feedback.flangeToTool.allFinite() || !feedback.toolJacobian.allFinite()
+        || (rotation.transpose() * rotation - Eigen::RotationMatrix::Identity()).norm() > 1e-5
         || std::abs(rotation.determinant() - 1.0) > 1e-5) {
         robotInfo_->receivingFeedback = false;
         SetFault("Invalid robot feedback");

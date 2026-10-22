@@ -27,7 +27,7 @@ private:
     void PublishState();
     void SetError(const std::string& message);
 
-    PandaModel model_;
+    FrankaArmModel model_;
     DCLConfiguration conf_;
     std::unique_ptr<DynamicController> dynamicController_;
     std::unique_ptr<JointReferenceGenerator> stopReferenceGenerator_;
