@@ -2,6 +2,7 @@
 #include "fer_msgs/conversions.hpp"
 #include "fer_msgs/fer_defines.hpp"
 
+#include <ctrl_toolbox_internal/Futils.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <libconfig.h++>
@@ -68,6 +69,21 @@ void RobotVisualizer::LoadObstacleMarkers(const std::string& configurationFile)
         plane.color.b = 0.2;
         plane.color.a = 0.3;
         planeMarkers_.push_back(plane);
+
+        visualization_msgs::msg::Marker label;
+        label.header.frame_id = baseFrame_;
+        label.ns = "avoidance_plane_labels";
+        label.id = index;
+        label.type = label.TEXT_VIEW_FACING;
+        label.action = label.ADD;
+        label.pose = plane.pose;
+        label.pose.position.x += 0.01 * normal.normalized().x();
+        label.pose.position.y += 0.01 * normal.normalized().y();
+        label.pose.position.z += 0.01 * normal.normalized().z();
+        label.scale.z = 0.06;
+        label.color.r = label.color.g = label.color.b = label.color.a = 1.0;
+        label.text = obstacle["name"].c_str();
+        planeMarkers_.push_back(label);
     }
 }
 
@@ -114,7 +130,7 @@ void RobotVisualizer::HandleStateData(const fer_msgs::msg::StateData& message)
         receivingFeedback_ = true;
     } catch (const std::exception& exception) {
         receivingFeedback_ = false;
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "[Visualizer] %s", exception.what());
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "%s", exception.what());
     }
 }
 
@@ -150,19 +166,24 @@ void RobotVisualizer::ProcessToolCommand(bool feedbackFresh)
         if (pendingCommand_->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             auto response = pendingCommand_->get();
             if (!response->success) {
-                RCLCPP_WARN(get_logger(), "[Visualizer] %s", response->res.c_str());
+                if (response->res.rfind("Command is not allowed in state ", 0) == 0) {
+                    const std::string message = std::string(tc::yellow) + response->res + tc::none;
+                    RCLCPP_WARN(get_logger(), "%s", message.c_str());
+                } else {
+                    RCLCPP_WARN(get_logger(), "%s", response->res.c_str());
+                }
             }
             pendingCommand_.reset();
         } else if (now().seconds() - commandSendTime_ > 5.0) {
             controlCommandClient_->remove_pending_request(*pendingCommand_);
             pendingCommand_.reset();
-            RCLCPP_WARN(get_logger(), "[Visualizer] Controller service timed out");
+            RCLCPP_WARN(get_logger(), "Controller service timed out");
         }
     }
     if (commandQueued_ && !pendingCommand_) {
         if (!feedbackFresh) {
             commandQueued_ = false;
-            RCLCPP_WARN(get_logger(), "[Visualizer] Fresh feedback is required for tool control");
+            RCLCPP_WARN(get_logger(), "Fresh feedback is required for tool control");
         } else if (controlCommandClient_->service_is_ready()) {
             commandQueued_ = false;
             auto request = std::make_shared<fer_msgs::srv::ControlCommand::Request>(commandRequest_);
@@ -170,7 +191,7 @@ void RobotVisualizer::ProcessToolCommand(bool feedbackFresh)
             commandSendTime_ = now().seconds();
         } else if (now().seconds() - commandSendTime_ > 5.0) {
             commandQueued_ = false;
-            RCLCPP_WARN(get_logger(), "[Visualizer] Controller service is unavailable");
+            RCLCPP_WARN(get_logger(), "Controller service is unavailable");
         }
     }
 }
@@ -346,7 +367,7 @@ void RobotVisualizer::HandleToolControlFeedback(
             commandSendTime_ = now().seconds();
         }
     } catch (const std::exception& exception) {
-        RCLCPP_WARN(get_logger(), "[Visualizer] %s", exception.what());
+        RCLCPP_WARN(get_logger(), "%s", exception.what());
     }
 }
 

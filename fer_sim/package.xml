@@ -6,6 +6,7 @@
     <maintainer email="francesco.wanderlingh@unige.it">Francesco Wanderlingh</maintainer>
     <license>MIT</license>
     <buildtool_depend>ament_cmake</buildtool_depend>
+    <depend>ctrl_toolbox</depend>
     <depend>rclcpp</depend>
     <depend>rosgraph_msgs</depend>
     <depend>fer_msgs</depend>

@@ -4,6 +4,7 @@ option(BUILD_TESTING "Build tests" OFF)
 # Accept the workspace-wide option; hardware targets are defined in fer_driver.
 option(FER_BUILD_HARDWARE "Build the libfranka hardware executables" ON)
 find_package(ament_cmake REQUIRED)
+find_package(ctrl_toolbox REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(fer_msgs REQUIRED)
 find_package(fer_model REQUIRED)
@@ -19,7 +20,7 @@ target_include_directories(fer_tcp_bridge_lib PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(fer_tcp_bridge_lib PUBLIC Boost::system fer_model::fer_model)
-ament_target_dependencies(fer_tcp_bridge_lib PUBLIC rclcpp fer_msgs)
+ament_target_dependencies(fer_tcp_bridge_lib PUBLIC ctrl_toolbox rclcpp fer_msgs)
 
 add_executable(tcp_bridge_node src/tcp_bridge_node.cpp)
 target_link_libraries(tcp_bridge_node fer_tcp_bridge_lib)
@@ -34,7 +35,7 @@ install(TARGETS fer_tcp_bridge_lib EXPORT export_${PROJECT_NAME}
 install(TARGETS tcp_bridge_node dummy_client_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp fer_msgs fer_model Boost)
+ament_export_dependencies(ctrl_toolbox rclcpp fer_msgs fer_model Boost)
 
 if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)

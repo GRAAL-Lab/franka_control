@@ -9,6 +9,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -395,6 +396,52 @@ class SimulationTest(unittest.TestCase):
         self.assertTrue(self.command('recover').success)
         self.until(lambda: not self.state.has_error and self.control.ctrl_state == 'disabled')
         self.assertFalse(self.state.control_active)
+
+    def test_interactive_marker_sequence_survives_rviz_frame_rate(self):
+        # RViz services its subscriptions once per display frame. A continuously
+        # moving pose must not overrun that reader's queue between frames.
+        self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
+                    '-r', f'__ns:={self.namespace}'])
+        publisher = self.node.create_publisher(StateData, 'state/state_data', qos_profile_sensor_data)
+        stop_publishing = threading.Event()
+
+        def publish_moving_feedback():
+            state = StateData()
+            state.header.frame_id = 'panda_link0'
+            state.connected = True
+            state.joint_state.name = [f'panda_joint{joint}' for joint in range(1, 8)]
+            state.joint_state.position = [0.0] * 7
+            state.tool_pose.position.z = 0.5
+            state.tool_pose.orientation.w = 1.0
+            while not stop_publishing.is_set():
+                state.tool_pose.position.x = 0.4 + 0.02 * math.sin(time.monotonic())
+                publisher.publish(state)
+                stop_publishing.wait(0.01)
+
+        updates = []
+        rviz_client = Node('rviz_rate_client', namespace=self.namespace)
+        subscription = rviz_client.create_subscription(
+            InteractiveMarkerUpdate, 'tool_control/update', updates.append, 100)
+        producer = threading.Thread(target=publish_moving_feedback)
+        producer.start()
+        try:
+            self.until(lambda: self.markers is not None and self.feedback_count >= 10)
+            deadline = time.monotonic() + 3.0
+            next_frame = time.monotonic()
+            while time.monotonic() < deadline:
+                rclpy.spin_once(rviz_client, timeout_sec=0.0)
+                next_frame += 1.0 / 30.0
+                time.sleep(max(0.0, next_frame - time.monotonic()))
+            self.assertGreater(len(updates), 20)
+            gaps = [(previous.seq_num + 1, current.seq_num)
+                    for previous, current in zip(updates, updates[1:])
+                    if current.seq_num != previous.seq_num + 1]
+            self.assertEqual(gaps, [], 'Marker updates were lost at RViz display cadence')
+        finally:
+            stop_publishing.set()
+            producer.join(timeout=2.0)
+            rviz_client.destroy_subscription(subscription)
+            rviz_client.destroy_node()
 
     def test_stationary_interactive_marker_does_not_publish_redundant_updates(self):
         # Feed the visualizer directly: no controller, driver or hardware is involved.
