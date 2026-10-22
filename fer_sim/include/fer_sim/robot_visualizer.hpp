@@ -43,7 +43,10 @@ private:
     void HandleStateData(const fer_msgs::msg::StateData& message);
     /** @brief Cache the controller state and current goal for interactive marker synchronization. */
     void HandleControlData(const fer_msgs::msg::ControlData& message);
-    /** @brief Process asynchronous tool commands and update markers only while robot feedback is fresh. */
+    /**
+     * @brief Process tool commands and render fresh feedback; publish interactive poses only when changed.
+     * @details Apply pending drag feedback even when no programmatic pose update is needed.
+     */
     void Run();
     /**
      * @brief Collect or expire the outstanding tool command and send a queued goal when feedback is

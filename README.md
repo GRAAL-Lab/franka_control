@@ -267,6 +267,12 @@ starts at the measured tool pose. Drag its translation or rotation handles and
 release to submit an absolute BASE Cartesian goal through `ControlCommand`.
 Feedback must be fresh and control enabled for motion to be accepted.
 
+The default **Interact** tool supports both marker handles and camera navigation.
+Drag empty space with the left mouse button to orbit, use the wheel to zoom,
+and middle-drag or Shift+left-drag to pan. Select **Move Camera** to navigate
+even when the pointer is over a marker. Camera navigation does not require
+the robot controller to be enabled.
+
 The visualizer publishes `panda_joint1` through `panda_joint7` TFs and a
 `ctrl_frame` preview while dragging. During Cartesian motion, the kinematic
 controller publishes the configured `goal_frame` (default `goal`) alongside the

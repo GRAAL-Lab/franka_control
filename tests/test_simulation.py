@@ -18,7 +18,7 @@ from rclpy.qos import qos_profile_sensor_data
 from fer_msgs.msg import ControlData, DynamicControlData, GripperState, StateData, TPIKAction, TaskStatus
 from fer_msgs.srv import ControlCommand, DriverCommand
 from rcl_interfaces.srv import GetParameters
-from visualization_msgs.msg import InteractiveMarkerFeedback, Marker, MarkerArray
+from visualization_msgs.msg import InteractiveMarkerFeedback, InteractiveMarkerUpdate, Marker, MarkerArray
 from visualization_msgs.srv import GetInteractiveMarkers
 from tf2_msgs.msg import TFMessage
 
@@ -392,6 +392,57 @@ class SimulationTest(unittest.TestCase):
         self.assertTrue(self.command('recover').success)
         self.until(lambda: not self.state.has_error and self.control.ctrl_state == 'disabled')
         self.assertFalse(self.state.control_active)
+
+    def test_stationary_interactive_marker_does_not_publish_redundant_updates(self):
+        # Feed the visualizer directly: no controller, driver or hardware is involved.
+        # A fast visualizer loop exposes redundant updates without rendering RViz.
+        self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
+                    '-r', f'__ns:={self.namespace}', '-p', 'loop_rate:=1000.0'])
+        state = StateData()
+        state.header.frame_id = 'panda_link0'
+        state.connected = True
+        state.joint_state.name = [f'panda_joint{joint}' for joint in range(1, 8)]
+        state.joint_state.position = [0.0] * 7
+        state.tool_pose.position.x = 0.4
+        state.tool_pose.position.z = 0.5
+        state.tool_pose.orientation.w = 1.0
+        publisher = self.node.create_publisher(StateData, 'state/state_data', qos_profile_sensor_data)
+        timer = self.node.create_timer(0.01, lambda: publisher.publish(state))
+        updates = []
+        self.subscriptions.append(self.node.create_subscription(
+            InteractiveMarkerUpdate, 'tool_control/update', updates.append, 100))
+        self.until(lambda: self.markers is not None and self.feedback_count >= 10)
+
+        initial = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(len(initial.markers), 1)
+        feedback_count = self.feedback_count
+        self.until(lambda: self.feedback_count >= feedback_count + 30)
+        stationary = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(stationary.sequence_number, initial.sequence_number,
+                         'An unchanged pose must not keep advancing the marker update sequence')
+
+        state.tool_pose.position.x += 0.02
+        self.until(lambda: any(update.seq_num > stationary.sequence_number and update.poses
+                               and abs(update.poses[0].pose.position.x - state.tool_pose.position.x) < 1e-8
+                               for update in updates))
+        translated = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(translated.sequence_number, stationary.sequence_number + 1)
+
+        # q and -q represent the same rotation and must not create another update.
+        state.tool_pose.orientation.w = -1.0
+        feedback_count = self.feedback_count
+        self.until(lambda: self.feedback_count >= feedback_count + 10)
+        equivalent = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(equivalent.sequence_number, translated.sequence_number)
+
+        state.tool_pose.orientation.z = math.sin(0.1 / 2.0)
+        state.tool_pose.orientation.w = math.cos(0.1 / 2.0)
+        self.until(lambda: any(update.seq_num > translated.sequence_number and update.poses
+                               and abs(update.poses[0].pose.orientation.z - state.tool_pose.orientation.z) < 1e-8
+                               for update in updates))
+        rotated = self.call(GetInteractiveMarkers, 'tool_control/get_interactive_markers')
+        self.assertEqual(rotated.sequence_number, translated.sequence_number + 1)
+        self.node.destroy_timer(timer)
 
     def test_interactive_tool_control_and_goal_tf(self):
         self.start_control_stack()

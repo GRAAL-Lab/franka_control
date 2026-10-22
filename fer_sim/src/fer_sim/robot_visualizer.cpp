@@ -134,7 +134,12 @@ void RobotVisualizer::Run()
     if (!dragging_ && !commandQueued_ && !pendingCommand_) {
         const auto pose = controlData_.ctrl_state == "move_cartesian" ? controlData_.target_pose
                                                                       : PoseToMessage(toolFrame_);
-        interactiveMarkerServer_->setPose("tool_control", pose);
+        visualization_msgs::msg::InteractiveMarker marker;
+        // setPose queues a numbered update even when the pose is unchanged.
+        // Avoid flooding RViz while idle or displaying a fixed Cartesian goal.
+        if (interactiveMarkerServer_->get("tool_control", marker) && marker.pose != pose) {
+            interactiveMarkerServer_->setPose("tool_control", pose);
+        }
     }
     interactiveMarkerServer_->applyChanges();
 }
