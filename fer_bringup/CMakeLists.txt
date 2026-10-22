@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(fer_bringup)
+option(BUILD_TESTING "Build tests" OFF)
 find_package(ament_cmake REQUIRED)
 install(DIRECTORY launch conf DESTINATION share/${PROJECT_NAME})
 ament_package()

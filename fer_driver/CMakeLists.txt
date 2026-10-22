@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(fer_driver)
 
+option(BUILD_TESTING "Build tests" OFF)
+
 find_package(ament_cmake REQUIRED)
 find_package(Threads REQUIRED)
 option(FER_BUILD_HARDWARE "Build the libfranka hardware executables" ON)

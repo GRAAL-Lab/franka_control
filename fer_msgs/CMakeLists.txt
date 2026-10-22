@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(fer_msgs)
+option(BUILD_TESTING "Build tests" OFF)
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)

@@ -55,13 +55,23 @@ equations, ROS interfaces, and realtime boundary.
 
 ## Dependencies and build
 
-Install ROS2 Jazzy, colcon, Eigen3 and `libconfig++-dev`. Build and install the
-same GRAAL libraries used by the reference controller: `rml`, `fsm`,
-`ctrl_toolbox`, `tpik`, and `ikcl`. Their CMake packages must be discoverable
-through the normal prefixes or `CMAKE_PREFIX_PATH`.
+Install ROS2 Jazzy and colcon, including the ROS packages `interactive_markers`,
+`rviz2`, and `eigen3_cmake_module`. Install or update the system-wide GRAAL libraries
+with the [GRAAL dependency installer](https://github.com/GRAAL-Lab/graal_utils/blob/main/scripts/install_update_graal_libs.sh)
+from a checkout of `graal_utils`:
 
-For hardware, use [libfranka 0.9.2](https://github.com/frankarobotics/libfranka/releases/tag/0.9.2),
-the release used to verify this driver's build, with compatible Panda firmware.
+```bash
+bash /path/to/graal_utils/scripts/install_update_graal_libs.sh
+```
+
+The script builds and installs `rml`, `fsm`, `ctrl_toolbox`, `tpik`, and `ikcl`
+in dependency order, along with other GRAAL libraries and system dependencies,
+including Eigen3 and `libconfig++-dev`. Their CMake packages must be discoverable
+through the normal installation prefixes or `CMAKE_PREFIX_PATH`.
+
+For hardware, install libfranka separately, choosing a release compatible with
+the Panda firmware. This driver's build was verified with
+[libfranka 0.9.2](https://github.com/frankarobotics/libfranka/releases/tag/0.9.2).
 Use the [0.9.2 API headers](https://github.com/frankarobotics/libfranka/tree/0.9.2/include/franka)
 and [0.9.2 examples](https://github.com/frankarobotics/libfranka/tree/0.9.2/examples)
 as the driver API references.
@@ -79,9 +89,7 @@ Run from this repository root:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths fer_* --ignore-src -r -y \
-  --skip-keys "libfranka rml fsm ctrl_toolbox tpik ikcl"
-colcon build --base-paths fer_* --symlink-install \
+colcon build --symlink-install \
   --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 source install/setup.bash
 ```
@@ -92,14 +100,15 @@ For a custom libfranka installation, append
 To build for simulation without libfranka:
 
 ```bash
-colcon build --base-paths fer_* --symlink-install \
+colcon build --symlink-install \
   --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DFER_BUILD_HARDWARE=OFF
 source install/setup.bash
 ```
 
 The GRAAL controller libraries are required in both builds. Source the installed
-workspace in each terminal. The explicit base paths keep the reference workspaces
-under `sources/` out of the build.
+workspace in each terminal. Tests are disabled by default. If an existing build
+directory has testing enabled, add `-DBUILD_TESTING=OFF` to the CMake arguments
+once to update its cached setting.
 
 ## Run
 
@@ -233,9 +242,13 @@ measured tool frame. RViz topics are relative to the selected ROS namespace.
 
 ## Validation and limits
 
+To build and run the tests, install `ament_cmake_gtest` and enable testing
+explicitly:
+
 ```bash
-colcon test --base-paths fer_* --packages-select fer_model fer_ctrl fer_driver fer_tcp_bridge \
-  --return-code-on-test-failure
+colcon build --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+colcon test --return-code-on-test-failure
 colcon test-result --verbose
 ROS_DOMAIN_ID=171 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST python3 tests/test_simulation.py
 ```

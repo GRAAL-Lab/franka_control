@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(fer_tcp_bridge)
+option(BUILD_TESTING "Build tests" OFF)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(fer_msgs REQUIRED)
