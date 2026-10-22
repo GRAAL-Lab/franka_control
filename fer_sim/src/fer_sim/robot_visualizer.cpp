@@ -6,6 +6,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <libconfig.h++>
 #include <future>
+#include <rclcpp/create_timer.hpp>
 
 using std::placeholders::_1;
 
@@ -20,6 +21,8 @@ RobotVisualizer::RobotVisualizer()
 
 void RobotVisualizer::LoadConfiguration()
 {
+    const bool isSim = declare_parameter("isSim", false);
+    set_parameter(rclcpp::Parameter("use_sim_time", isSim));
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
     jointFramePrefix_ = declare_parameter("joint_frame_prefix", "panda_joint");
     controlFrame_ = declare_parameter("control_frame", "ctrl_frame");
@@ -75,8 +78,8 @@ void RobotVisualizer::Initialization()
     controlCommandClient_ = create_client<fer_msgs::srv::ControlCommand>(topicnames::control_command);
     intMarkerServer_ = std::make_unique<interactive_markers::InteractiveMarkerServer>("tool_control", this);
     tfPublisher_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-    runTimer_ = create_wall_timer(
-        std::chrono::duration<double>(1.0 / loopRate_), std::bind(&RobotVisualizer::Run, this));
+    runTimer_ = rclcpp::create_timer(this, get_clock(),
+        rclcpp::Duration::from_seconds(1.0 / loopRate_), std::bind(&RobotVisualizer::Run, this));
 }
 
 void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
@@ -101,7 +104,7 @@ void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
         if (intMarkerServer_->empty()) {
             make6DofMarker(message.tool_pose);
         }
-        lastFeedbackTime_ = SteadyTime();
+        lastFeedbackTime_ = now().seconds();
         receivingFeedback_ = true;
     } catch (const std::exception& exception) {
         receivingFeedback_ = false;
@@ -123,13 +126,13 @@ void RobotVisualizer::Run()
                 RCLCPP_WARN(get_logger(), "[Visualizer] %s", response->res.c_str());
             }
             pendingCommand_.reset();
-        } else if (SteadyTime() - commandSendTime_ > 5.0) {
+        } else if (now().seconds() - commandSendTime_ > 5.0) {
             controlCommandClient_->remove_pending_request(*pendingCommand_);
             pendingCommand_.reset();
             RCLCPP_WARN(get_logger(), "[Visualizer] Controller service timed out");
         }
     }
-    bool feedbackFresh = receivingFeedback_ && SteadyTime() - lastFeedbackTime_ <= 0.2;
+    bool feedbackFresh = receivingFeedback_ && now().seconds() - lastFeedbackTime_ <= 0.2;
     if (sendCommandToController_ && !pendingCommand_) {
         if (!feedbackFresh) {
             sendCommandToController_ = false;
@@ -138,8 +141,8 @@ void RobotVisualizer::Run()
             sendCommandToController_ = false;
             auto request = std::make_shared<fer_msgs::srv::ControlCommand::Request>(commandRequest_);
             pendingCommand_.emplace(controlCommandClient_->async_send_request(request));
-            commandSendTime_ = SteadyTime();
-        } else if (SteadyTime() - commandSendTime_ > 5.0) {
+            commandSendTime_ = now().seconds();
+        } else if (now().seconds() - commandSendTime_ > 5.0) {
             sendCommandToController_ = false;
             RCLCPP_WARN(get_logger(), "[Visualizer] Controller service is unavailable");
         }
@@ -284,7 +287,7 @@ void RobotVisualizer::interactiveMarkerCB(
 {
     using Feedback = visualization_msgs::msg::InteractiveMarkerFeedback;
     if (feedback->marker_name != "tool_control" || feedback->header.frame_id != baseFrame_
-        || !receivingFeedback_ || SteadyTime() - lastFeedbackTime_ > 0.2) {
+        || !receivingFeedback_ || now().seconds() - lastFeedbackTime_ > 0.2) {
         return;
     }
     if (feedback->event_type != Feedback::MOUSE_DOWN && feedback->event_type != Feedback::POSE_UPDATE
@@ -312,7 +315,7 @@ void RobotVisualizer::interactiveMarkerCB(
         dragging_ = feedback->event_type == Feedback::POSE_UPDATE;
         sendCommandToController_ = feedback->event_type == Feedback::MOUSE_UP;
         if (sendCommandToController_) {
-            commandSendTime_ = SteadyTime();
+            commandSendTime_ = now().seconds();
         }
     } catch (const std::exception& exception) {
         RCLCPP_WARN(get_logger(), "[Visualizer] %s", exception.what());

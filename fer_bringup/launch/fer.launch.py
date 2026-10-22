@@ -26,10 +26,12 @@ def include_launch(package_name, filename, arguments, condition=None):
 def generate_launch_description():
     namespace = LaunchConfiguration('namespace')
     dynamic_configuration = LaunchConfiguration('dcl_config')
+    is_sim = LaunchConfiguration('isSim')
 
     return LaunchDescription([
         DeclareLaunchArgument('namespace', default_value='fer'),
-        DeclareLaunchArgument('use_sim', default_value='true'),
+        DeclareLaunchArgument('isSim', default_value='true'),
+        DeclareLaunchArgument('simTimeScale', default_value='1.0'),
         DeclareLaunchArgument('robot_ip', default_value='172.16.0.2'),
         DeclareLaunchArgument('with_gripper', default_value='true'),
         DeclareLaunchArgument('rviz', default_value='false'),
@@ -44,23 +46,25 @@ def generate_launch_description():
 
         include_launch('fer_ctrl', 'control.launch.py', {
             'namespace': namespace,
-            'simulated_driver': LaunchConfiguration('use_sim'),
+            'isSim': is_sim,
             'controller_config': LaunchConfiguration('controller_config'),
             'kcl_config': LaunchConfiguration('kcl_config'),
             'dcl_config': dynamic_configuration,
         }),
         include_launch('fer_sim', 'sim.launch.py', {
             'namespace': namespace,
+            'isSim': is_sim,
+            'simTimeScale': LaunchConfiguration('simTimeScale'),
             'simulator_config': LaunchConfiguration('simulator_config'),
             'dcl_config': dynamic_configuration,
-        }, IfCondition(LaunchConfiguration('use_sim'))),
+        }, IfCondition(is_sim)),
         include_launch('fer_driver', 'driver.launch.py', {
             'namespace': namespace,
             'robot_ip': LaunchConfiguration('robot_ip'),
             'with_gripper': LaunchConfiguration('with_gripper'),
             'driver_config': LaunchConfiguration('driver_config'),
             'dcl_config': dynamic_configuration,
-        }, UnlessCondition(LaunchConfiguration('use_sim'))),
+        }, UnlessCondition(is_sim)),
 
         Node(
             package='fer_tcp_bridge',
@@ -69,6 +73,8 @@ def generate_launch_description():
             output='screen',
             condition=IfCondition(LaunchConfiguration('with_tcp')),
             parameters=[{
+                'isSim': ParameterValue(is_sim, value_type=bool),
+                'use_sim_time': ParameterValue(is_sim, value_type=bool),
                 'host': LaunchConfiguration('tcp_host'),
                 'port': ParameterValue(LaunchConfiguration('tcp_port'), value_type=int),
             }],
@@ -81,7 +87,11 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('rviz')),
             parameters=[
                 LaunchConfiguration('controller_config'),
-                {'configuration_file': LaunchConfiguration('kcl_config')},
+                {
+                    'configuration_file': LaunchConfiguration('kcl_config'),
+                    'isSim': ParameterValue(is_sim, value_type=bool),
+                    'use_sim_time': ParameterValue(is_sim, value_type=bool),
+                },
             ],
         ),
         Node(
@@ -90,5 +100,6 @@ def generate_launch_description():
             namespace=namespace,
             condition=IfCondition(LaunchConfiguration('rviz')),
             arguments=['-d', package_file('fer_bringup', 'conf/fer.rviz')],
+            parameters=[{'use_sim_time': ParameterValue(is_sim, value_type=bool)}],
         ),
     ])

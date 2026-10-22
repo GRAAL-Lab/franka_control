@@ -152,7 +152,7 @@ bool ArmCommandParser::ParseAndSendCommand(const ArmProtocol::ArmCommandMessage&
         RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] Controller unavailable or command queue full");
         return false;
     }
-    pendingCommands_.push_back({ controlCommandClient_->async_send_request(request), SteadyTime() });
+    pendingCommands_.push_back({ controlCommandClient_->async_send_request(request), node_->now().seconds() });
     return true;
 }
 
@@ -167,7 +167,7 @@ void ArmCommandParser::CheckResponses()
                 RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] %s", response->res.c_str());
             }
             command = pendingCommands_.erase(command);
-        } else if (SteadyTime() - command->sendTime > 5.0) {
+        } else if (node_->now().seconds() - command->sendTime > 5.0) {
             controlCommandClient_->remove_pending_request(command->future);
             RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] Controller service timed out");
             command = pendingCommands_.erase(command);

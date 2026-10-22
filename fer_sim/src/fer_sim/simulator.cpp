@@ -26,6 +26,14 @@ Simulator::Simulator()
 
 void Simulator::LoadConfiguration()
 {
+    if (!declare_parameter("isSim", true)) {
+        throw std::invalid_argument("simulator_node requires isSim=true");
+    }
+    set_parameter(rclcpp::Parameter("use_sim_time", true));
+    simTimeScale_ = declare_parameter("simTimeScale", 1.0);
+    if (!std::isfinite(simTimeScale_) || simTimeScale_ <= 0.0) {
+        throw std::invalid_argument("simTimeScale must be finite and positive");
+    }
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/dcl_fer.conf";
     conf_.LoadConfiguration(declare_parameter("dynamic_configuration_file", defaultFile));
     loopRate_ = declare_parameter("loop_rate", 1000.0);
@@ -70,16 +78,18 @@ void Simulator::Initialization()
         topicnames::driver_command, std::bind(&Simulator::DriverCommandsHandler, this, _1, _2));
     gripperCommandService_ = create_service<fer_msgs::srv::DriverCommand>(
         topicnames::gripper_command, std::bind(&Simulator::GripperCommandsHandler, this, _1, _2));
-    lastRunTime_ = SteadyTime();
-    runTimer_
-        = create_wall_timer(std::chrono::duration<double>(1.0 / loopRate_), std::bind(&Simulator::Run, this));
-    publishTimer_ = create_wall_timer(
-        std::chrono::duration<double>(1.0 / publishRate_), std::bind(&Simulator::PublishState, this));
+    clockPub_ = create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
+    const double wallPeriod = 1.0 / (loopRate_ * simTimeScale_);
+    if (!std::isfinite(wallPeriod) || wallPeriod < 1e-9) {
+        throw std::invalid_argument("simTimeScale produces an invalid timer period");
+    }
+    runTimer_ = create_wall_timer(
+        std::chrono::duration<double>(wallPeriod), std::bind(&Simulator::Run, this));
 }
 
 void Simulator::DynamicControlCB(const fer_msgs::msg::DynamicControlData& message)
 {
-    lastCommandTime_ = SteadyTime();
+    lastCommandTime_ = simulationTime_.seconds();
     commandEnabled_ = message.control_enabled;
     JointReference reference;
     reference.position = Eigen::Map<const JointVector>(message.joint_positions.data());
@@ -151,9 +161,10 @@ void Simulator::SetError(const std::string& message)
 
 void Simulator::Run()
 {
-    double currentTime = SteadyTime();
-    double sampleTime = std::clamp(currentTime - lastRunTime_, 0.0, 0.005);
-    lastRunTime_ = currentTime;
+    const auto step = rclcpp::Duration::from_seconds(1.0 / loopRate_);
+    simulationTime_ += step;
+    const double currentTime = simulationTime_.seconds();
+    const double sampleTime = step.seconds();
     bool commandFresh = currentTime - lastCommandTime_ <= commandTimeout_;
     if (controlRequested_ && !controlActive_ && commandEnabled_ && commandFresh && !hasError_) {
         controlActive_ = true;
@@ -168,11 +179,22 @@ void Simulator::Run()
         stopReferenceGenerator_->SetReference(jointReference_);
     }
     if (controlActive_) {
-        RunDynamicControl(sampleTime);
+        const int substeps = static_cast<int>(std::ceil(sampleTime / 0.001));
+        for (int index = 0; index < substeps && controlActive_; ++index) {
+            RunDynamicControl(sampleTime / substeps);
+        }
     }
 
     double widthError = gripperTarget_ - gripperWidth_;
     gripperWidth_ += std::clamp(widthError, -gripperSpeed_ * sampleTime, gripperSpeed_ * sampleTime);
+
+    rosgraph_msgs::msg::Clock clock;
+    clock.clock = simulationTime_;
+    clockPub_->publish(clock);
+    if (currentTime - lastPublishTime_ >= 1.0 / publishRate_ - 1e-9) {
+        PublishState();
+        lastPublishTime_ = currentTime;
+    }
 }
 
 void Simulator::RunDynamicControl(double sampleTime)
@@ -209,7 +231,7 @@ void Simulator::RunDynamicControl(double sampleTime)
     bool referenceStopped = jointReference_.velocity.cwiseAbs().maxCoeff() < 1e-4
         && jointReference_.acceleration.cwiseAbs().maxCoeff() < 1e-3;
     if (stopping_ && referenceStopped && jointVelocity_.cwiseAbs().maxCoeff() < 0.01
-        && SteadyTime() - stopStartTime_ > 0.1) {
+        && simulationTime_.seconds() - stopStartTime_ > 0.1) {
         controlActive_ = false;
         jointVelocity_.setZero();
         commandedTorque_.setZero();
@@ -224,7 +246,7 @@ void Simulator::PublishState()
     JacobianMatrix toolJacobian = model_.Jacobian(model_.ToolFrameID());
     const auto& flangeToTool = model_.FlangeToTool();
     fer_msgs::msg::StateData message;
-    message.header.stamp = now();
+    message.header.stamp = simulationTime_;
     message.header.frame_id = baseFrame_;
     message.connected = true;
     message.ready = !hasError_;

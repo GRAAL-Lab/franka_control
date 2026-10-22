@@ -7,6 +7,7 @@
 #include "fer_msgs/msg/gripper_state.hpp"
 #include "fer_msgs/srv/driver_command.hpp"
 #include <rclcpp/rclcpp.hpp>
+#include <rosgraph_msgs/msg/clock.hpp>
 
 namespace fer {
 
@@ -45,7 +46,9 @@ private:
     double publishRate_ = 100.0;
     double commandTimeout_ = 0.2;
     double lastCommandTime_ = 0.0;
-    double lastRunTime_ = 0.0;
+    double simTimeScale_ = 1.0;
+    rclcpp::Time simulationTime_{ 0, 0, RCL_ROS_TIME };
+    double lastPublishTime_ = 0.0;
     double stopStartTime_ = 0.0;
     bool controlRequested_ = false;
     bool commandEnabled_ = false;
@@ -64,7 +67,7 @@ private:
     rclcpp::Service<fer_msgs::srv::DriverCommand>::SharedPtr driverCommandService_;
     rclcpp::Service<fer_msgs::srv::DriverCommand>::SharedPtr gripperCommandService_;
     rclcpp::TimerBase::SharedPtr runTimer_;
-    rclcpp::TimerBase::SharedPtr publishTimer_;
+    rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clockPub_;
 };
 
 }

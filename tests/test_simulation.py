@@ -17,6 +17,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from fer_msgs.msg import ControlData, DynamicControlData, GripperState, StateData, TPIKAction, TaskStatus
 from fer_msgs.srv import ControlCommand, DriverCommand
+from rcl_interfaces.srv import GetParameters
 from visualization_msgs.msg import InteractiveMarkerFeedback, Marker, MarkerArray
 from visualization_msgs.srv import GetInteractiveMarkers
 from tf2_msgs.msg import TFMessage
@@ -103,7 +104,7 @@ class SimulationTest(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3)
-            if process.returncode not in (0, -signal.SIGINT):
+            if process.returncode not in (0, -signal.SIGINT) and process.pid not in self.expected_exits:
                 log.seek(0)
                 print(log.read())
             log.close()
@@ -151,7 +152,7 @@ class SimulationTest(unittest.TestCase):
         self.start(['ros2', 'launch', 'fer_bringup', 'fer.launch.py',
                     f'namespace:={self.namespace}', 'with_tcp:=true', f'tcp_port:={port}'])
         self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
-                    '-r', f'__ns:={self.namespace}'])
+                    '-r', f'__ns:={self.namespace}', '-p', 'isSim:=true'])
         self.until(lambda: self.state is not None and self.control is not None, timeout=20.0)
         self.assertEqual(self.control.ctrl_state, 'disabled')
         self.until(lambda: self.dynamic is not None and self.action is not None)
@@ -266,9 +267,55 @@ class SimulationTest(unittest.TestCase):
         self.until(lambda: self.control.ctrl_state == 'disabled' and not self.state.control_active)
         self.assertTrue(all(math.isfinite(q) for q in self.state.joint_state.position))
 
+    def test_global_simulation_clock_accelerates_physics_and_controllers(self):
+        self.start(['ros2', 'launch', 'fer_bringup', 'fer.launch.py',
+                    f'namespace:={self.namespace}', 'isSim:=true', 'simTimeScale:=2.0'])
+        self.until(lambda: self.state is not None and self.control is not None
+                   and self.dynamic is not None and self.gripper is not None, timeout=20.0)
+        for node_name in ('kinematic_control_node', 'dynamic_control_node', 'simulator_node'):
+            parameters = self.call(GetParameters, node_name + '/get_parameters',
+                                   names=['isSim', 'use_sim_time'])
+            self.assertTrue(all(value.bool_value for value in parameters.values))
+        parameters = self.call(GetParameters, 'simulator_node/get_parameters', names=['simTimeScale'])
+        self.assertEqual(parameters.values[0].double_value, 2.0)
+
+        self.assertTrue(self.call(DriverCommand, 'gripper/command', command_type='move',
+                                 width=0.0, speed=0.02, force=20.0).success)
+        previous = self.gripper
+        self.until(lambda: self.gripper is not previous)
+        initial = self.gripper
+        simulated_start = initial.header.stamp.sec + initial.header.stamp.nanosec * 1e-9
+        wall_start = time.monotonic()
+        self.until(lambda: self.gripper.width <= initial.width - 0.02)
+        wall_elapsed = time.monotonic() - wall_start
+        simulated_elapsed = (self.gripper.header.stamp.sec
+                             + self.gripper.header.stamp.nanosec * 1e-9 - simulated_start)
+        self.assertAlmostEqual(initial.width - self.gripper.width, 0.02 * simulated_elapsed, delta=0.0002)
+        self.assertGreater(simulated_elapsed / wall_elapsed, 1.4)
+        self.assertLess(simulated_elapsed / wall_elapsed, 2.6)
+
+        self.assertTrue(self.command('enable').success)
+        self.until(lambda: self.state.control_active and self.control.ctrl_state == 'idle')
+        initial_joint = self.state.joint_state.position[0]
+        self.assertTrue(self.command('move_joint_i_vel', joint_index=0, joint_setpoint=[0.1]).success)
+        self.until(lambda: self.control.ctrl_state == 'move_joints_vel')
+        self.until(lambda: self.control.ctrl_state == 'idle')
+        self.assertGreater(self.state.joint_state.position[0], initial_joint + 0.001)
+        self.assertFalse(self.state.has_error)
+
+    def test_invalid_simulation_scale_is_rejected(self):
+        for scale in ('0.0', '-1.0'):
+            process = self.start(['ros2', 'run', 'fer_sim', 'simulator_node', '--ros-args',
+                                  '-r', f'__ns:={self.namespace}', '-p', f'simTimeScale:={scale}'])
+            self.expected_exits.add(process.pid)
+            self.until(lambda: process.poll() is not None)
+            self.assertNotEqual(process.returncode, 0)
+            self.logs[-1].seek(0)
+            self.assertIn('simTimeScale must be finite and positive', self.logs[-1].read())
+
     def test_driver_watchdog_requires_recovery(self):
         self.start(['ros2', 'run', 'fer_sim', 'simulator_node', '--ros-args',
-                    '-r', f'__ns:={self.namespace}'])
+                    '-r', f'__ns:={self.namespace}', '-p', 'simTimeScale:=2.0'])
         self.until(lambda: self.state is not None)
         publisher = self.node.create_publisher(DynamicControlData, 'ctrl/dynamic_control', 1)
         message = DynamicControlData()
@@ -281,7 +328,14 @@ class SimulationTest(unittest.TestCase):
         self.assertTrue(result.success)
         self.until(lambda: self.state.control_active)
         self.node.destroy_timer(timer)
-        self.until(lambda: self.state.has_error and not self.state.control_active)
+        before = self.state.header.stamp.sec + self.state.header.stamp.nanosec * 1e-9
+        wall_start = time.monotonic()
+        self.until(lambda: self.state.has_error)
+        elapsed = self.state.header.stamp.sec + self.state.header.stamp.nanosec * 1e-9 - before
+        self.assertGreater(elapsed, 0.15)
+        self.assertLess(elapsed, 0.30)
+        self.assertLess(time.monotonic() - wall_start, 0.25)
+        self.until(lambda: not self.state.control_active)
         self.assertIn('watchdog', self.state.error)
         self.assertFalse(self.call(DriverCommand, 'driver/command', command_type='enable').success)
         self.assertTrue(self.call(DriverCommand, 'driver/command', command_type='recover').success)
@@ -292,9 +346,9 @@ class SimulationTest(unittest.TestCase):
         simulator = self.start(['ros2', 'run', 'fer_sim', 'simulator_node', '--ros-args',
                                 '-r', f'__ns:={self.namespace}'])
         dynamic = self.start(['ros2', 'run', 'fer_ctrl', 'dynamic_control_node', '--ros-args',
-                              '-r', f'__ns:={self.namespace}'])
+                              '-r', f'__ns:={self.namespace}', '-p', 'isSim:=true'])
         kinematic = self.start(['ros2', 'run', 'fer_ctrl', 'kinematic_control_node', '--ros-args',
-                                '-r', f'__ns:={self.namespace}'])
+                                '-r', f'__ns:={self.namespace}', '-p', 'isSim:=true'])
         self.until(lambda: self.state is not None and self.control is not None
                    and self.dynamic is not None and self.feedback_count >= 20, timeout=20.0)
         deadline = time.monotonic() + 5.0
@@ -336,7 +390,7 @@ class SimulationTest(unittest.TestCase):
     def test_interactive_tool_control_and_goal_tf(self):
         self.start_control_stack()
         self.start(['ros2', 'run', 'fer_sim', 'visualizer_node', '--ros-args',
-                    '-r', f'__ns:={self.namespace}'])
+                    '-r', f'__ns:={self.namespace}', '-p', 'isSim:=true'])
         self.until(lambda: self.markers is not None
                    and all(f'panda_joint{joint}' in self.transforms for joint in range(1, 8)))
         joints = [marker for marker in self.markers.markers if marker.ns == 'manipulator_joints']

@@ -1,6 +1,7 @@
 #include "fer_ctrl/task_priority_controller.hpp"
 #include "fer_msgs/conversions.hpp"
 #include <gtest/gtest.h>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <unistd.h>
@@ -27,13 +28,13 @@ protected:
         }
     }
 
-    std::unique_ptr<fer::TaskPriorityController> MakeController(bool simulatedDriver = false)
+    std::unique_ptr<fer::TaskPriorityController> MakeController(bool isSim = false)
     {
         std::string file = "/tmp/fer_kcl_test_" + std::to_string(getpid()) + "_"
             + std::to_string(configurationFiles_.size()) + ".conf";
         configuration_.writeFile(file.c_str());
         configurationFiles_.push_back(file);
-        return std::make_unique<fer::TaskPriorityController>(file, simulatedDriver);
+        return std::make_unique<fer::TaskPriorityController>(file, isSim);
     }
 
     fer::CommandResult SendCommand(const std::string& command)
@@ -81,6 +82,43 @@ TEST_F(ControllerTest, LoadsRealTaskPriorityArchitecture)
     EXPECT_EQ(manager->CurrentActionID(), "Idle");
     EXPECT_EQ(manager->GetAction("MoveTool")->PriorityLevels().front()->ID(), "PL_Safety");
     EXPECT_EQ(controller_->GetConfiguration().saturationMax.size(), 7);
+}
+
+TEST_F(ControllerTest, SimulatedDriverUpdatesActionTimeOnCommandsAndControlCycles)
+{
+    auto controller = MakeController(true);
+    auto manager = controller->GetActionManager();
+    controller->Run(1.0);
+    const auto initialTime = manager->Time();
+
+    fer::CommandRequest request;
+    request.commandType = "disable";
+    ASSERT_TRUE(controller->ExecuteCommand(request, 1.125).success);
+    const auto commandElapsed
+        = std::chrono::duration_cast<std::chrono::milliseconds>(manager->Time() - initialTime);
+    EXPECT_EQ(commandElapsed.count(), 125);
+
+    controller->Run(1.25);
+    const auto runElapsed
+        = std::chrono::duration_cast<std::chrono::milliseconds>(manager->Time() - initialTime);
+    EXPECT_EQ(runElapsed.count(), 250);
+}
+
+TEST_F(ControllerTest, PhysicalDriverUsesSystemActionTime)
+{
+    auto controller = MakeController();
+    auto manager = controller->GetActionManager();
+    const auto before = std::chrono::time_point_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now());
+    controller->Run(1.0);
+    fer::CommandRequest request;
+    request.commandType = "disable";
+    ASSERT_TRUE(controller->ExecuteCommand(request, 500.0).success);
+    controller->Run(1000.0);
+    const auto actionTime = manager->Time();
+    const auto after = std::chrono::system_clock::now();
+    EXPECT_GE(actionTime, before);
+    EXPECT_LE(actionTime, after);
 }
 
 TEST_F(ControllerTest, RejectsUnknownTaskAndPriorityLevel)

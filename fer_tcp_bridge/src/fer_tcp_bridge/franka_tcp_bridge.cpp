@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <rclcpp/create_timer.hpp>
 
 using boost::asio::ip::tcp;
 using std::placeholders::_1;
@@ -22,6 +23,8 @@ FrankaTCPBridge::FrankaTCPBridge()
 
 void FrankaTCPBridge::Initialization()
 {
+    const bool isSim = declare_parameter("isSim", false);
+    set_parameter(rclcpp::Parameter("use_sim_time", isSim));
     std::string host = declare_parameter("host", "127.0.0.1");
     int port = declare_parameter("port", 9999);
     if (port < 1 || port > 65535) {
@@ -40,10 +43,10 @@ void FrankaTCPBridge::Initialization()
         rclcpp::QoS(1).reliable(), std::bind(&FrankaTCPBridge::ControlDataCB, this, _1));
     gripperStateSub_ = create_subscription<fer_msgs::msg::GripperState>(topicnames::gripper_state,
         rclcpp::QoS(1).reliable(), std::bind(&FrankaTCPBridge::GripperStateCB, this, _1));
-    commandsTimer_
-        = create_wall_timer(std::chrono::milliseconds(10), std::bind(&FrankaTCPBridge::CommandLoop, this));
-    feedbackTimer_
-        = create_wall_timer(std::chrono::milliseconds(10), std::bind(&FrankaTCPBridge::FeedbackLoop, this));
+    commandsTimer_ = rclcpp::create_timer(this, get_clock(), rclcpp::Duration::from_seconds(0.01),
+        std::bind(&FrankaTCPBridge::CommandLoop, this));
+    feedbackTimer_ = rclcpp::create_timer(this, get_clock(), rclcpp::Duration::from_seconds(0.01),
+        std::bind(&FrankaTCPBridge::FeedbackLoop, this));
     RCLCPP_INFO(get_logger(), "[TCP Bridge] Binary ArmProtocol listening on %s:%d", host.c_str(), port);
 }
 

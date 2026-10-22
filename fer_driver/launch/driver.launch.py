@@ -26,6 +26,7 @@ def generate_launch_description():
             parameters=[
                 LaunchConfiguration('driver_config'),
                 {'robot_ip': LaunchConfiguration('robot_ip'),
+                 'use_sim_time': False,
                  'dynamic_configuration_file': LaunchConfiguration('dcl_config')},
             ],
         ),
@@ -35,6 +36,6 @@ def generate_launch_description():
             namespace=LaunchConfiguration('namespace'),
             condition=IfCondition(LaunchConfiguration('with_gripper')),
             output='screen',
-            parameters=[{'robot_ip': LaunchConfiguration('robot_ip')}],
+            parameters=[{'robot_ip': LaunchConfiguration('robot_ip'), 'use_sim_time': False}],
         ),
     ])

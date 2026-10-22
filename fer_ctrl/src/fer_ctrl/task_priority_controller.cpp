@@ -28,7 +28,7 @@
 
 namespace fer {
 
-TaskPriorityController::TaskPriorityController(const std::string& configurationFile, bool simulatedDriver)
+TaskPriorityController::TaskPriorityController(const std::string& configurationFile, bool isSim)
 {
     libconfig::Config configuration;
     configuration.readFile(configurationFile.c_str());
@@ -40,13 +40,13 @@ TaskPriorityController::TaskPriorityController(const std::string& configurationF
     ConfigurePriorityLevelsFromFile(actionManager_, tasksMap_, configuration);
     ConfigureActionsFromFile(actionManager_, configuration);
 
-    actionManager_->IsSimulation(true);
+    actionManager_->IsSimulation(isSim);
     actionManager_->Time(0);
     actionManager_->SetTransitionDuration(conf_->actionTransitionDuration * 1000.0);
     iCat_ = std::make_shared<tpik::iCAT>(ARM_JOINTS);
     iCat_->SetSaturation(conf_->saturationMin, conf_->saturationMax);
     solver_ = std::make_shared<tpik::Solver>(actionManager_, iCat_);
-    SetUpFSM(configuration, simulatedDriver);
+    SetUpFSM(configuration, isSim);
 }
 
 void TaskPriorityController::Initialization()
@@ -106,7 +106,7 @@ void TaskPriorityController::SetUpTasks()
     velocity->SetReferenceRate(JointVector::Zero());
 }
 
-void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool simulatedDriver)
+void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool isSim)
 {
     for (auto& state : statesMap_) {
         state.second->robotInfo = robotInfo_;
@@ -150,7 +150,7 @@ void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool sim
             controllerFsm_.EnableCommandInState(state, command, true);
         }
     }
-    if (simulatedDriver) {
+    if (isSim) {
         controllerFsm_.EnableCommandInState(ID::states::parked, "move_joints_pos", true);
     }
     controllerFsm_.SetInitState(ID::states::disabled);

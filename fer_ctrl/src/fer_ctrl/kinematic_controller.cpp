@@ -4,6 +4,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
+#include <rclcpp/create_timer.hpp>
 #include <future>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
@@ -20,8 +21,9 @@ KinematicController::KinematicController()
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
     toolFrame_ = declare_parameter("tool_frame", "fer_tool");
     goalFrame_ = declare_parameter("goal_frame", "goal");
-    bool simulatedDriver = declare_parameter("simulated_driver", false);
-    controller_ = std::make_unique<TaskPriorityController>(configurationFile, simulatedDriver);
+    bool isSim = declare_parameter("isSim", false);
+    set_parameter(rclcpp::Parameter("use_sim_time", isSim));
+    controller_ = std::make_unique<TaskPriorityController>(configurationFile, isSim);
     Initialization();
     RCLCPP_INFO(
         get_logger(), "[KCL] Loaded tasks, priority levels and actions from %s", configurationFile.c_str());
@@ -44,10 +46,10 @@ void KinematicController::Initialization()
         topicnames::control_command, std::bind(&KinematicController::CommandsHandler, this, _1, _2));
     tfPublisher_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     double sampleTime = 1.0 / controller_->GetConfiguration().loopRate;
-    runTimer_ = create_wall_timer(
-        std::chrono::duration<double>(sampleTime), std::bind(&KinematicController::Run, this));
-    slowTimer_ = create_wall_timer(
-        std::chrono::milliseconds(200), std::bind(&KinematicController::PublishAction, this));
+    runTimer_ = rclcpp::create_timer(this, get_clock(),
+        rclcpp::Duration::from_seconds(sampleTime), std::bind(&KinematicController::Run, this));
+    slowTimer_ = rclcpp::create_timer(this, get_clock(),
+        rclcpp::Duration::from_seconds(0.2), std::bind(&KinematicController::PublishAction, this));
 }
 
 void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
@@ -69,7 +71,7 @@ void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
         feedback.ready = message.ready;
         feedback.controlActive = message.control_active;
         feedback.hasError = message.has_error;
-        if (!controller_->SetFeedback(feedback, SteadyTime()) || !feedback.connected) {
+        if (!controller_->SetFeedback(feedback, now().seconds()) || !feedback.connected) {
             return;
         }
 
@@ -108,7 +110,7 @@ void KinematicController::CommandsHandler(fer_msgs::srv::ControlCommand::Request
     command.targetPosition = Eigen::Map<const Eigen::Vector3d>(request->target_position.data());
     command.targetOrientation.RPY(Eigen::Map<const Eigen::Vector3d>(request->target_orientation.data()));
     command.frameType = request->frame_type;
-    CommandResult result = controller_->ExecuteCommand(command, SteadyTime());
+    CommandResult result = controller_->ExecuteCommand(command, now().seconds());
     response->success = result.success;
     response->res = result.message;
     if (!result.success) {
@@ -133,7 +135,7 @@ void KinematicController::HandleGripperCommand(
         return;
     }
     if (!gripperClient_->service_is_ready()
-        || (operation != "stop" && !controller_->HasFreshFeedback(SteadyTime()))) {
+        || (operation != "stop" && !controller_->HasFreshFeedback(now().seconds()))) {
         response.success = false;
         response.res = "Gripper service or robot feedback is unavailable";
         return;
@@ -163,7 +165,7 @@ void KinematicController::SendDriverCommand(const DriverClient::SharedPtr& clien
     const std::shared_ptr<fer_msgs::srv::DriverCommand::Request>& request)
 {
     pendingRequests_.push_back(
-        { client, client->async_send_request(request), request->command_type, SteadyTime() });
+        { client, client->async_send_request(request), request->command_type, now().seconds() });
 }
 
 void KinematicController::CheckDriverResponses()
@@ -181,7 +183,7 @@ void KinematicController::CheckDriverResponses()
                 }
             }
             completed = true;
-        } else if (SteadyTime() - pending->requestTime > 30.0) {
+        } else if (now().seconds() - pending->requestTime > 30.0) {
             pending->client->remove_pending_request(pending->future);
             RCLCPP_ERROR(get_logger(), "[KCL] Driver %s timed out", pending->command.c_str());
             if (pending->client == driverClient_ && controller_->GetState() == ID::states::enabling) {
@@ -201,7 +203,7 @@ void KinematicController::CheckDriverResponses()
 void KinematicController::Run()
 {
     try {
-        ControlOutput output = controller_->Run(SteadyTime());
+        ControlOutput output = controller_->Run(now().seconds());
         CheckDriverResponses();
         PublishControl(output);
         PublishTasksInfo(output);

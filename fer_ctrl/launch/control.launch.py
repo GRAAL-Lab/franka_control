@@ -13,10 +13,14 @@ def generate_launch_description():
     controller_parameters = str(package_directory / 'conf/controller.yaml')
     kinematic_configuration = str(package_directory / 'conf/kcl_fer.conf')
     dynamic_configuration = str(package_directory / 'conf/dcl_fer.conf')
+    simulation_parameters = {
+        'isSim': ParameterValue(LaunchConfiguration('isSim'), value_type=bool),
+        'use_sim_time': ParameterValue(LaunchConfiguration('isSim'), value_type=bool),
+    }
 
     return LaunchDescription([
         DeclareLaunchArgument('namespace', default_value='fer'),
-        DeclareLaunchArgument('simulated_driver', default_value='false'),
+        DeclareLaunchArgument('isSim', default_value='false'),
         DeclareLaunchArgument('controller_config', default_value=controller_parameters),
         DeclareLaunchArgument('kcl_config', default_value=kinematic_configuration),
         DeclareLaunchArgument('dcl_config', default_value=dynamic_configuration),
@@ -29,8 +33,8 @@ def generate_launch_description():
                 LaunchConfiguration('controller_config'),
                 {
                     'configuration_file': LaunchConfiguration('kcl_config'),
-                    'simulated_driver': ParameterValue(LaunchConfiguration('simulated_driver'), value_type=bool),
                 },
+                simulation_parameters,
             ],
         ),
         Node(
@@ -41,6 +45,7 @@ def generate_launch_description():
             parameters=[
                 LaunchConfiguration('controller_config'),
                 {'configuration_file': LaunchConfiguration('dcl_config')},
+                simulation_parameters,
             ],
         ),
     ])

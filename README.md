@@ -129,6 +129,22 @@ ros2 launch fer_bringup fer.launch.py \
 The same `dcl_config` is passed to the dynamic node and selected backend.
 Configuration files are loaded at startup; restart the stack after changing them.
 
+Bringup controls simulation globally with `isSim` (default `true`) and
+`simTimeScale` (default `1.0`):
+
+```bash
+ros2 launch fer_bringup fer.launch.py isSim:=true simTimeScale:=2.0
+```
+
+The simulator publishes the shared ROS `/clock`. Physics, gripper motion,
+controller updates, action transitions, watchdogs and message timestamps follow
+that clock. `simTimeScale:=2.0` targets twice real-time speed by scheduling fixed
+numerical steps more frequently. The integration step stays the same; achieved
+speed depends on available CPU. The scale must be finite and positive.
+`isSim:=false` selects the hardware backend and system time. For nodes started
+individually, pass `-p isSim:=true` to the controllers and visualizer to follow
+the simulator's clock. The simulator itself defaults to simulation mode.
+
 The simulator's `tool_offset` parameter sets the flange-to-tool distance in metres.
 It defaults to `fer::DEFAULT_TOOL_OFFSET` in `fer_model/franka_arm_model.hpp`; set
 `tool_offset` in the simulator YAML to override it. All `FrankaArmModel` instances
@@ -138,9 +154,9 @@ transform from driver or simulator feedback.
 Hardware:
 
 ```bash
-ros2 launch fer_bringup fer.launch.py use_sim:=false robot_ip:=172.16.0.2
+ros2 launch fer_bringup fer.launch.py isSim:=false robot_ip:=172.16.0.2
 # Without the Franka hand:
-ros2 launch fer_bringup fer.launch.py use_sim:=false robot_ip:=172.16.0.2 with_gripper:=false
+ros2 launch fer_bringup fer.launch.py isSim:=false robot_ip:=172.16.0.2 with_gripper:=false
 ```
 
 Activate FCI and unlock the brakes in Franka Desk before enabling.

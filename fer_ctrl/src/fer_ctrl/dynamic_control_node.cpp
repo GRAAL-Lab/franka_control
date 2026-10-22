@@ -4,6 +4,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <chrono>
+#include <rclcpp/create_timer.hpp>
 
 using std::placeholders::_1;
 
@@ -12,6 +13,8 @@ namespace fer {
 DynamicControlNode::DynamicControlNode()
     : Node("dynamic_control_node")
 {
+    const bool isSim = declare_parameter("isSim", false);
+    set_parameter(rclcpp::Parameter("use_sim_time", isSim));
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/dcl_fer.conf";
     std::string configurationFile = declare_parameter("configuration_file", defaultFile);
     conf_.LoadConfiguration(configurationFile);
@@ -25,9 +28,9 @@ DynamicControlNode::DynamicControlNode()
         rclcpp::QoS(1).reliable(), std::bind(&DynamicControlNode::ControlDataCB, this, _1));
     dynamicControlPub_ = create_publisher<fer_msgs::msg::DynamicControlData>(
         topicnames::dynamic_control, rclcpp::QoS(1).reliable());
-    lastRunTime_ = SteadyTime();
-    runTimer_ = create_wall_timer(
-        std::chrono::duration<double>(1.0 / conf_.loopRate), std::bind(&DynamicControlNode::Run, this));
+    lastRunTime_ = now().seconds();
+    runTimer_ = rclcpp::create_timer(this, get_clock(),
+        rclcpp::Duration::from_seconds(1.0 / conf_.loopRate), std::bind(&DynamicControlNode::Run, this));
     RCLCPP_INFO(get_logger(), "[DCL] %s reference generator loaded from %s", conf_.controlMode.c_str(),
         configurationFile.c_str());
 }
@@ -46,7 +49,7 @@ void DynamicControlNode::StateDataCB(const fer_msgs::msg::StateData& message)
     jointPosition_ = jointPosition;
     controlActive_ = message.control_active;
     driverError_ = message.has_error;
-    lastFeedbackTime_ = SteadyTime();
+    lastFeedbackTime_ = now().seconds();
     receivingFeedback_ = true;
 }
 
@@ -61,13 +64,13 @@ void DynamicControlNode::ControlDataCB(const fer_msgs::msg::ControlData& message
     requestedVelocity_ = requestedVelocity;
     controlRequested_ = message.control_enabled;
     controllerState_ = message.ctrl_state;
-    lastCommandTime_ = SteadyTime();
+    lastCommandTime_ = now().seconds();
     receivingCommands_ = true;
 }
 
 void DynamicControlNode::Run()
 {
-    double currentTime = SteadyTime();
+    double currentTime = now().seconds();
     double sampleTime = currentTime - lastRunTime_;
     lastRunTime_ = currentTime;
     bool feedbackFresh = receivingFeedback_ && currentTime - lastFeedbackTime_ <= conf_.feedbackTimeout;
