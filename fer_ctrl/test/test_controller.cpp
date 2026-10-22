@@ -494,7 +494,7 @@ TEST_F(ControllerTest, RejectsMotionCommandsWhileParkingAndUnparking)
             }
             auto result = controller_->ExecuteCommand(request, currentTime_);
             EXPECT_FALSE(result.success);
-            EXPECT_NE(result.message.find("not allowed in state " + state), std::string::npos);
+            EXPECT_EQ(result.message, "Command " + command + " is not allowed in state " + state);
             EXPECT_EQ(controller_->GetState(), state);
         }
 

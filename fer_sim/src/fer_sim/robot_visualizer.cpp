@@ -183,7 +183,7 @@ void RobotVisualizer::ProcessToolCommand(bool feedbackFresh)
         if (pendingCommand_->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             auto response = pendingCommand_->get();
             if (!response->success) {
-                if (response->res.rfind("Command is not allowed in state ", 0) == 0) {
+                if (response->res.find(" is not allowed in state ") != std::string::npos) {
                     const std::string message = std::string(tc::yellow) + response->res + tc::none;
                     RCLCPP_WARN(get_logger(), "%s", message.c_str());
                 } else {

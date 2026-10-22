@@ -174,7 +174,7 @@ void ArmCommandParser::CheckResponses()
             auto response = command->future.get();
             if (response->success) {
                 RCLCPP_INFO(node_->get_logger(), "[Cmd Parser] %s", response->res.c_str());
-            } else if (response->res.rfind("Command is not allowed in state ", 0) == 0) {
+            } else if (response->res.find(" is not allowed in state ") != std::string::npos) {
                 const std::string message = std::string(tc::yellow) + response->res + tc::none;
                 RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] %s", message.c_str());
             } else {

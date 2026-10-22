@@ -208,7 +208,7 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
         return { false, "No fresh robot feedback" };
     }
     if (!controllerFsm_.CommandAllowed(commandName)) {
-        return { false, "Command is not allowed in state " + GetState() };
+        return { false, "Command " + request.commandType + " is not allowed in state " + GetState() };
     }
     if (commandName == "recover" && robotInfo_->feedback.controlActive) {
         return { false, "Disable and wait for control to stop before recovery" };
