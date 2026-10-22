@@ -4,9 +4,11 @@
 # gripper_move, gripper_grasp, gripper_home, gripper_stop.
 string command_type
 string move_type "absolute"
+# Joint positions or velocities, according to command_type.
 float64[] joint_setpoint
 int32 joint_index
 float64[3] target_position
+# Roll, pitch, yaw (Rz(yaw) * Ry(pitch) * Rx(roll)).
 float64[3] target_orientation
 int32 frame_type
 float64 gripper_setpoint

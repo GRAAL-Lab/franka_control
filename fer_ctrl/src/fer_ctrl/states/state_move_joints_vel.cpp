@@ -8,7 +8,7 @@ MoveJointsVel::MoveJointsVel()
 {
 }
 
-bool MoveJointsVel::SetJointsGoal(const CommandRequest& request)
+bool MoveJointsVel::SetVelocityGoal(const CommandRequest& request)
 {
     bool singleJoint = request.commandType == "move_joint_i_vel";
     if (request.jointSetpoint.size() != (singleJoint ? 1 : ARM_JOINTS)
@@ -22,8 +22,8 @@ bool MoveJointsVel::SetJointsGoal(const CommandRequest& request)
         int joint = singleJoint ? request.jointIndex : static_cast<int>(index);
         velocityGoal[joint] = request.jointSetpoint[index];
     }
-    if (!velocityGoal.allFinite() || (velocityGoal.array() < conf->saturationMin.array()).any()
-        || (velocityGoal.array() > conf->saturationMax.array()).any()) {
+    if (!velocityGoal.allFinite() || (velocityGoal.array() < configuration->saturationMin.array()).any()
+        || (velocityGoal.array() > configuration->saturationMax.array()).any()) {
         robotInfo->status = "Velocity setpoints must be finite and within saturationMin/saturationMax";
         return false;
     }
@@ -37,7 +37,7 @@ fsm::retval MoveJointsVel::Execute()
 {
     auto task = std::dynamic_pointer_cast<ikcl::JointsVelocity>(tasksMap.at(ID::tasks::jointsVelocity).task);
     task->SetReferenceRate(robotInfo->velocityGoal);
-    if (robotInfo->currentTime - robotInfo->lastVelocityCommandTime > conf->velocityCommandTimeout) {
+    if (robotInfo->currentTime - robotInfo->lastVelocityCommandTime > configuration->velocityCommandTimeout) {
         robotInfo->velocityGoal.setZero();
         task->SetReferenceRate(robotInfo->velocityGoal);
         return ChangeState(ID::states::idle, "Velocity command expired");

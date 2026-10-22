@@ -7,7 +7,7 @@ namespace commands {
 fsm::retval MoveJointsVel::Execute()
 {
     auto state = std::dynamic_pointer_cast<states::MoveJointsVel>(state_);
-    if (!state->SetJointsGoal(request_)) {
+    if (!state->SetVelocityGoal(request_)) {
         return fsm::fail;
     }
     robotInfo->status = "Joint velocity command accepted";

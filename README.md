@@ -45,10 +45,22 @@ The simulator uses the same dynamic-controller library.
 
 Headers and implementations are separated into `include/<package>/` and
 `src/<package>/`. Commands and states follow Undroid's `GenericCommand` and
-`GenericState` organization. Functions use names such as `Initialization`,
-`SetUpFSM`, `StateDataCB`, `CommandsHandler`, `Run`, and `PublishControl`.
+`GenericState` organization. `InitializeROSInterfaces` creates node interfaces,
+`Handle...` methods process messages or services, `Run` advances one cycle,
+and `Publish...` methods publish results. The core creates tasks in `CreateTasks`
+and wires state dependencies and permissions in `ConfigureStateMachine`.
 Executable source files contain the ROS initialization and spin loop.
 [.clang-format](.clang-format) records the common C++ style.
+
+Headers document function behavior, units, frames, timing and failure results
+using Doxygen comments. Generate the API reference from this repository root:
+
+```bash
+doxygen Doxyfile
+# Open docs/api/html/index.html
+```
+
+See [the editing guide](docs/development.md) for the main extension points.
 
 See [the architecture](docs/architecture.md) for the state machine, controller
 equations, ROS interfaces, and realtime boundary.

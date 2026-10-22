@@ -32,24 +32,24 @@ TaskPriorityController::TaskPriorityController(const std::string& configurationF
 {
     libconfig::Config configuration;
     configuration.readFile(configurationFile.c_str());
-    conf_ = std::make_shared<KCLConfiguration>();
-    conf_->ConfigureFromFile(configuration);
-    Initialization();
-    SetUpTasks();
+    configuration_ = std::make_shared<KCLConfiguration>();
+    configuration_->ConfigureFromFile(configuration);
+    InitializeModelAndCommands();
+    CreateTasks();
     ConfigureTasksFromFile(tasksMap_, configuration);
     ConfigurePriorityLevelsFromFile(actionManager_, tasksMap_, configuration);
     ConfigureActionsFromFile(actionManager_, configuration);
 
     actionManager_->IsSimulation(isSim);
     actionManager_->Time(0);
-    actionManager_->SetTransitionDuration(conf_->actionTransitionDuration * 1000.0);
+    actionManager_->SetTransitionDuration(configuration_->actionTransitionDuration * 1000.0);
     iCat_ = std::make_shared<tpik::iCAT>(ARM_JOINTS);
-    iCat_->SetSaturation(conf_->saturationMin, conf_->saturationMax);
+    iCat_->SetSaturation(configuration_->saturationMin, configuration_->saturationMax);
     solver_ = std::make_shared<tpik::Solver>(actionManager_, iCat_);
-    SetUpFSM(configuration, isSim);
+    ConfigureStateMachine(configuration, isSim);
 }
 
-void TaskPriorityController::Initialization()
+void TaskPriorityController::InitializeModelAndCommands()
 {
     robotInfo_ = std::make_shared<RobotInfo>();
     armModel_ = std::make_shared<FrankaArmModel>();
@@ -77,7 +77,7 @@ void TaskPriorityController::Initialization()
         { "move_cartesian", std::make_shared<commands::MoveCartesian>() } };
 }
 
-void TaskPriorityController::SetUpTasks()
+void TaskPriorityController::CreateTasks()
 {
     const std::string armID = armModel_->ID();
     tasksMap_[ID::tasks::jointsLimit].task = std::make_shared<tasks::JointsLimit>(robotModel_, armID);
@@ -92,8 +92,8 @@ void TaskPriorityController::SetUpTasks()
     tasksMap_[ID::tasks::toolOrientation].task = std::make_shared<ikcl::CartesianOrientation>(
         ID::tasks::toolOrientation, robotModel_, robotInfo_->toolID);
 
-    tasksMap_[ID::tasks::obstacleAvoidance].task
-        = std::make_shared<tasks::ObstacleAvoidance>(robotModel_, robotInfo_->toolID, conf_->obstacles);
+    tasksMap_[ID::tasks::obstacleAvoidance].task = std::make_shared<tasks::ObstacleAvoidance>(
+        robotModel_, robotInfo_->toolID, configuration_->obstacles);
 
     auto position
         = std::dynamic_pointer_cast<ikcl::JointsPosition>(tasksMap_.at(ID::tasks::jointsPosition).task);
@@ -102,32 +102,38 @@ void TaskPriorityController::SetUpTasks()
     auto velocity
         = std::dynamic_pointer_cast<ikcl::JointsVelocity>(tasksMap_.at(ID::tasks::jointsVelocity).task);
     position->Reference() = HomeJointPosition();
-    posture->Reference() = conf_->unparkedJointsPos;
+    posture->Reference() = configuration_->unparkedJointsPos;
     velocity->SetReferenceRate(JointVector::Zero());
 }
 
-void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool isSim)
+void TaskPriorityController::ConfigureStateMachine(libconfig::Config& configuration, bool isSim)
 {
-    for (auto& state : statesMap_) {
-        state.second->robotInfo = robotInfo_;
-        state.second->conf = conf_;
-        state.second->armModel = armModel_;
-        state.second->robotModel = robotModel_;
-        state.second->actionManager = actionManager_;
-        state.second->tasksMap = tasksMap_;
-        state.second->SetFSM(&controllerFsm_);
-        state.second->ConfigureStateFromFile(configuration);
-        controllerFsm_.AddState(state.first, state.second.get());
+    for (auto& [stateName, state] : statesMap_) {
+        state->robotInfo = robotInfo_;
+        state->configuration = configuration_;
+        state->armModel = armModel_;
+        state->robotModel = robotModel_;
+        state->actionManager = actionManager_;
+        state->tasksMap = tasksMap_;
+        state->SetFSM(&controllerFsm_);
+        state->ConfigureStateFromFile(configuration);
+        controllerFsm_.AddState(stateName, state.get());
     }
-    for (auto& command : commandsMap_) {
-        command.second->robotInfo = robotInfo_;
-        command.second->SetFSM(&controllerFsm_);
-        controllerFsm_.AddCommand(command.first, command.second.get());
+    for (auto& [commandName, command] : commandsMap_) {
+        command->robotInfo = robotInfo_;
+        command->SetFSM(&controllerFsm_);
+        controllerFsm_.AddCommand(commandName, command.get());
     }
     commandsMap_.at("move_joints_pos")->SetState(statesMap_.at(ID::states::move_joints_pos));
     commandsMap_.at("move_joints_vel")->SetState(statesMap_.at(ID::states::move_joints_vel));
     commandsMap_.at("move_cartesian")->SetState(statesMap_.at(ID::states::move_cartesian));
 
+    ConfigureStatePermissions(isSim);
+    controllerFsm_.SetInitState(ID::states::disabled);
+}
+
+void TaskPriorityController::ConfigureStatePermissions(bool isSim)
+{
     for (const auto& currentState : statesMap_) {
         for (const auto& nextState : statesMap_) {
             if (nextState.first != currentState.first) {
@@ -153,7 +159,6 @@ void TaskPriorityController::SetUpFSM(libconfig::Config& configuration, bool isS
     if (isSim) {
         controllerFsm_.EnableCommandInState(ID::states::parked, "move_joints_pos", true);
     }
-    controllerFsm_.SetInitState(ID::states::disabled);
 }
 
 bool TaskPriorityController::SetFeedback(const RobotFeedback& feedback, double receiveTime)
@@ -179,9 +184,9 @@ bool TaskPriorityController::SetFeedback(const RobotFeedback& feedback, double r
 
 bool TaskPriorityController::HasFreshFeedback(double currentTime) const
 {
-    double age = currentTime - robotInfo_->lastFeedbackTime;
-    return robotInfo_->receivingFeedback && robotInfo_->feedback.connected && age >= 0.0
-        && age <= conf_->feedbackTimeout;
+    const double feedbackAge = currentTime - robotInfo_->lastFeedbackTime;
+    return robotInfo_->receivingFeedback && robotInfo_->feedback.connected && feedbackAge >= 0.0
+        && feedbackAge <= configuration_->feedbackTimeout;
 }
 
 CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& request, double currentTime)
@@ -197,8 +202,9 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
     if (commandsMap_.count(commandName) == 0) {
         return { false, "Unsupported command: " + request.commandType };
     }
-    bool unconditional = commandName == "disable" || commandName == "stop" || commandName == "recover";
-    if (!unconditional && !HasFreshFeedback(currentTime)) {
+    const bool canInterruptMotion
+        = commandName == "disable" || commandName == "stop" || commandName == "recover";
+    if (!canInterruptMotion && !HasFreshFeedback(currentTime)) {
         return { false, "No fresh robot feedback" };
     }
     if (!controllerFsm_.CommandAllowed(commandName)) {
@@ -207,12 +213,12 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
     if (commandName == "recover" && robotInfo_->feedback.controlActive) {
         return { false, "Disable and wait for control to stop before recovery" };
     }
-    if (!unconditional && commandName != "enable"
+    if (!canInterruptMotion && commandName != "enable"
         && (!robotInfo_->feedback.controlActive || robotInfo_->feedback.hasError)) {
         return { false, "Enable the controller before moving" };
     }
 
-    if (unconditional && controllerFsm_.GetNextStateName() != GetState()) {
+    if (canInterruptMotion && controllerFsm_.GetNextStateName() != GetState()) {
         // SetNextState(current) is a no-op in FSM. Reset its pending target so
         // stop/disable/recover can cancel a transition before the timer applies it.
         controllerFsm_.SetInitState(GetState());
@@ -225,9 +231,9 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
 
 void TaskPriorityController::UpdateTasks()
 {
-    for (auto& task : tasksMap_) {
-        if (task.second.task->Enabled()) {
-            task.second.task->Update();
+    for (const auto& [taskName, taskInfo] : tasksMap_) {
+        if (taskInfo.task->Enabled()) {
+            taskInfo.task->Update();
         }
     }
 }
@@ -235,12 +241,13 @@ void TaskPriorityController::UpdateTasks()
 void TaskPriorityController::ApplyJointLimits(ControlOutput& output)
 {
     for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
-        double lower = std::min(0.0,
-            -(robotInfo_->feedback.jointPosition[joint] - JointLimitsMin()[joint] - conf_->jointLimitMargin));
-        double upper = std::max(0.0,
-            JointLimitsMax()[joint] - conf_->jointLimitMargin - robotInfo_->feedback.jointPosition[joint]);
-        lower = std::max(lower, conf_->saturationMin[joint]);
-        upper = std::min(upper, conf_->saturationMax[joint]);
+        const double position = robotInfo_->feedback.jointPosition[joint];
+        const double margin = configuration_->jointLimitMargin;
+        // Reduce outward velocity near a limit while always allowing a joint to retreat.
+        double lower = std::min(0.0, -(position - JointLimitsMin()[joint] - margin));
+        double upper = std::max(0.0, JointLimitsMax()[joint] - margin - position);
+        lower = std::max(lower, configuration_->saturationMin[joint]);
+        upper = std::min(upper, configuration_->saturationMax[joint]);
         double limitedVelocity = std::clamp(output.jointVelocity[joint], lower, upper);
         output.jointLimitActive |= limitedVelocity != output.jointVelocity[joint];
         output.jointVelocity[joint] = limitedVelocity;
@@ -325,7 +332,7 @@ const RobotInfo& TaskPriorityController::GetRobotInfo() const
 
 const KCLConfiguration& TaskPriorityController::GetConfiguration() const
 {
-    return *conf_;
+    return *configuration_;
 }
 
 const TasksMap& TaskPriorityController::GetTasksMap() const

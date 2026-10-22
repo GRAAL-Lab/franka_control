@@ -1,3 +1,5 @@
+/** @file robot_visualizer.hpp */
+
 #ifndef FER_SIM_ROBOT_VISUALIZER_HPP
 #define FER_SIM_ROBOT_VISUALIZER_HPP
 
@@ -13,22 +15,52 @@
 
 namespace fer {
 
+/**
+ * @brief ROS-clock visualization of measured arm kinematics, obstacle planes and an interactive tool
+ * goal.
+ */
 class RobotVisualizer : public rclcpp::Node {
 public:
+    /** @brief Load display configuration and create marker, feedback, command and TF interfaces. */
     RobotVisualizer();
 
 private:
     using CommandClient = rclcpp::Client<fer_msgs::srv::ControlCommand>;
 
+    /** @brief Read frame/rate parameters and build obstacle plane markers from kcl_fer.conf. */
     void LoadConfiguration();
-    void Initialization();
-    void StateDataCB(const fer_msgs::msg::StateData& message);
-    void ControlDataCB(const fer_msgs::msg::ControlData& message);
+    /** @brief Read obstacle planes from the controller configuration and build their base-frame markers. */
+    void LoadObstacleMarkers(const std::string& configurationFile);
+    /**
+     * @brief Create ROS publishers, subscriptions, the interactive marker server and the node-clock
+     * timer.
+     */
+    void InitializeROSInterfaces();
+    /**
+     * @brief Validate measured joints/tool pose, update the RML arm and initialize the tool control
+     * marker.
+     */
+    void HandleStateData(const fer_msgs::msg::StateData& message);
+    /** @brief Cache the controller state and current goal for interactive marker synchronization. */
+    void HandleControlData(const fer_msgs::msg::ControlData& message);
+    /** @brief Process asynchronous tool commands and update markers only while robot feedback is fresh. */
     void Run();
+    /**
+     * @brief Collect or expire the outstanding tool command and send a queued goal when feedback is
+     * fresh.
+     */
+    void ProcessToolCommand(bool feedbackFresh);
+    /** @brief Publish the arm line, base, joints, configured planes and joint TF frames. */
     void PublishMarkers();
+    /** @brief Broadcast a transform from the configured base frame to childFrame using the node timestamp. */
     void PublishToTF(const Eigen::TransformationMatrix& frame, const std::string& childFrame);
-    void make6DofMarker(const geometry_msgs::msg::Pose& pose);
-    void interactiveMarkerCB(
+    /** @brief Create the interactive translation/rotation controls at the given base-frame tool pose. */
+    void CreateToolControlMarker(const geometry_msgs::msg::Pose& pose);
+    /**
+     * @brief Track drag feedback and queue an absolute base-frame Cartesian command when the mouse is
+     * released.
+     */
+    void HandleToolControlFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
 
     std::string baseFrame_;
@@ -39,15 +71,15 @@ private:
     double commandSendTime_ = 0.0;
     bool receivingFeedback_ = false;
     bool dragging_ = false;
-    bool sendCommandToController_ = false;
+    bool commandQueued_ = false;
     FrankaArmModel model_;
     Eigen::TransformationMatrix toolFrame_;
     Eigen::TransformationMatrix controlFramePose_;
-    fer_msgs::msg::ControlData controlDataMsg_;
+    fer_msgs::msg::ControlData controlData_;
     fer_msgs::srv::ControlCommand::Request commandRequest_;
     std::optional<CommandClient::FutureAndRequestId> pendingCommand_;
     std::vector<visualization_msgs::msg::Marker> planeMarkers_;
-    std::unique_ptr<interactive_markers::InteractiveMarkerServer> intMarkerServer_;
+    std::unique_ptr<interactive_markers::InteractiveMarkerServer> interactiveMarkerServer_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tfPublisher_;
     CommandClient::SharedPtr controlCommandClient_;
     rclcpp::TimerBase::SharedPtr runTimer_;

@@ -23,8 +23,10 @@ bool MoveCartesian::SetCartesianGoal(const CommandRequest& request)
         = MakeTransformation(request.targetPosition, request.targetOrientation);
     Eigen::TransformationMatrix goalFrame = requestedFrame;
     if (relative && request.frameType == 0) {
+        // A tool-frame increment composes on the right of the measured tool pose.
         goalFrame = robotInfo->feedback.toolFrame * requestedFrame;
     } else if (relative) {
+        // A base-frame increment adds base translation and rotates about base axes.
         goalFrame = robotInfo->feedback.toolFrame;
         goalFrame.TranslationVector(goalFrame.TranslationVector() + requestedFrame.TranslationVector());
         goalFrame.RotationMatrix(requestedFrame.RotationMatrix() * goalFrame.RotationMatrix());
@@ -46,11 +48,11 @@ fsm::retval MoveCartesian::Execute()
     distanceTask->SetTargetDistance(error.LinearVector(), rml::FrameID::WorldFrame);
     orientationTask->SetTargetFrame(robotInfo->cartesianGoalFrame, rml::FrameID::WorldFrame);
 
-    if (robotInfo->linearError < conf->linearErrorThreshold
-        && robotInfo->angularError < conf->angularErrorThreshold) {
+    if (robotInfo->linearError < configuration->linearErrorThreshold
+        && robotInfo->angularError < configuration->angularErrorThreshold) {
         return ChangeState(ID::states::idle, "Cartesian goal reached");
     }
-    if (robotInfo->currentTime - robotInfo->stateEntryTime > conf->moveTimeout) {
+    if (robotInfo->currentTime - robotInfo->stateEntryTime > configuration->moveTimeout) {
         return ChangeState(ID::states::idle, "Cartesian move timed out");
     }
     return fsm::ok;

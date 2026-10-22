@@ -9,6 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
+    """Launch kinematic and dynamic controllers using the same ROS clock selection."""
     package_directory = Path(get_package_share_directory('fer_ctrl'))
     controller_parameters = str(package_directory / 'conf/controller.yaml')
     kinematic_configuration = str(package_directory / 'conf/kcl_fer.conf')

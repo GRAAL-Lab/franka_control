@@ -17,25 +17,26 @@ DynamicControlNode::DynamicControlNode()
     set_parameter(rclcpp::Parameter("use_sim_time", isSim));
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/dcl_fer.conf";
     std::string configurationFile = declare_parameter("configuration_file", defaultFile);
-    conf_.LoadConfiguration(configurationFile);
+    configuration_.LoadConfiguration(configurationFile);
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
-    referenceGenerator_ = std::make_unique<JointReferenceGenerator>(conf_);
+    referenceGenerator_ = std::make_unique<JointReferenceGenerator>(configuration_);
     referenceGenerator_->Reset(jointPosition_);
 
     stateDataSub_ = create_subscription<fer_msgs::msg::StateData>(topicnames::state_data,
-        rclcpp::SensorDataQoS().keep_last(1), std::bind(&DynamicControlNode::StateDataCB, this, _1));
+        rclcpp::SensorDataQoS().keep_last(1), std::bind(&DynamicControlNode::HandleStateData, this, _1));
     controlDataSub_ = create_subscription<fer_msgs::msg::ControlData>(topicnames::ctrl_data,
-        rclcpp::QoS(1).reliable(), std::bind(&DynamicControlNode::ControlDataCB, this, _1));
+        rclcpp::QoS(1).reliable(), std::bind(&DynamicControlNode::HandleControlData, this, _1));
     dynamicControlPub_ = create_publisher<fer_msgs::msg::DynamicControlData>(
         topicnames::dynamic_control, rclcpp::QoS(1).reliable());
     lastRunTime_ = now().seconds();
     runTimer_ = rclcpp::create_timer(this, get_clock(),
-        rclcpp::Duration::from_seconds(1.0 / conf_.loopRate), std::bind(&DynamicControlNode::Run, this));
-    RCLCPP_INFO(get_logger(), "[DCL] %s reference generator loaded from %s", conf_.controlMode.c_str(),
-        configurationFile.c_str());
+        rclcpp::Duration::from_seconds(1.0 / configuration_.loopRate),
+        std::bind(&DynamicControlNode::Run, this));
+    RCLCPP_INFO(get_logger(), "[DCL] %s reference generator loaded from %s",
+        configuration_.controlMode.c_str(), configurationFile.c_str());
 }
 
-void DynamicControlNode::StateDataCB(const fer_msgs::msg::StateData& message)
+void DynamicControlNode::HandleStateData(const fer_msgs::msg::StateData& message)
 {
     receivingFeedback_ = false;
     if (!message.connected || message.header.frame_id != baseFrame_
@@ -53,12 +54,12 @@ void DynamicControlNode::StateDataCB(const fer_msgs::msg::StateData& message)
     receivingFeedback_ = true;
 }
 
-void DynamicControlNode::ControlDataCB(const fer_msgs::msg::ControlData& message)
+void DynamicControlNode::HandleControlData(const fer_msgs::msg::ControlData& message)
 {
     receivingCommands_ = false;
     JointVector requestedVelocity = Eigen::Map<const JointVector>(message.joint_velocities.data());
     if (!requestedVelocity.allFinite()
-        || requestedVelocity.cwiseAbs().maxCoeff() > conf_.maxJointVelocity + 1e-9) {
+        || requestedVelocity.cwiseAbs().maxCoeff() > configuration_.maxJointVelocity + 1e-9) {
         return;
     }
     requestedVelocity_ = requestedVelocity;
@@ -70,12 +71,14 @@ void DynamicControlNode::ControlDataCB(const fer_msgs::msg::ControlData& message
 
 void DynamicControlNode::Run()
 {
-    double currentTime = now().seconds();
-    double sampleTime = currentTime - lastRunTime_;
+    const double currentTime = now().seconds();
+    const double sampleTime = currentTime - lastRunTime_;
     lastRunTime_ = currentTime;
-    bool feedbackFresh = receivingFeedback_ && currentTime - lastFeedbackTime_ <= conf_.feedbackTimeout;
-    bool commandFresh = receivingCommands_ && currentTime - lastCommandTime_ <= conf_.commandTimeout;
-    bool enabled = feedbackFresh && commandFresh && controlRequested_ && !driverError_;
+    const bool feedbackFresh
+        = receivingFeedback_ && currentTime - lastFeedbackTime_ <= configuration_.feedbackTimeout;
+    const bool commandFresh
+        = receivingCommands_ && currentTime - lastCommandTime_ <= configuration_.commandTimeout;
+    const bool enabled = feedbackFresh && commandFresh && controlRequested_ && !driverError_;
 
     if (!enabled || !controlActive_) {
         referenceGenerator_->Reset(jointPosition_);

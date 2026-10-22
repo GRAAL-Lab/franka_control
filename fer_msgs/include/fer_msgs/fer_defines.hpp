@@ -1,7 +1,10 @@
+/** @file fer_defines.hpp */
+
 #ifndef FER_MSGS_FER_DEFINES_HPP
 #define FER_MSGS_FER_DEFINES_HPP
 
 namespace fer {
+/** @brief Relative ROS topic and service names, resolved within the node namespace. */
 namespace topicnames {
 // Relative names allow the whole stack to run under another ROS namespace.
 inline constexpr char state_data[] = "state/state_data";

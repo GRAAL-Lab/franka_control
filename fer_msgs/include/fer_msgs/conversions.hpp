@@ -1,3 +1,5 @@
+/** @file conversions.hpp */
+
 #ifndef FER_MSGS_CONVERSIONS_HPP
 #define FER_MSGS_CONVERSIONS_HPP
 
@@ -9,11 +11,20 @@
 
 namespace fer {
 
+/**
+ * @brief Read monotonic wall time in seconds for hardware watchdogs.
+ * @return Seconds since the steady clock epoch; unrelated to ROS simulated time.
+ */
 inline double SteadyTime()
 {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+/**
+ * @brief Convert an RML transform to a ROS pose in the same parent frame.
+ * @param frame Transform with translation in metres and a valid rotation.
+ * @return Pose containing the translation and quaternion orientation.
+ */
 inline geometry_msgs::msg::Pose PoseToMessage(const Eigen::TransformationMatrix& frame)
 {
     geometry_msgs::msg::Pose message;
@@ -28,6 +39,13 @@ inline geometry_msgs::msg::Pose PoseToMessage(const Eigen::TransformationMatrix&
     return message;
 }
 
+/**
+ * @brief Convert a ROS pose to an RML transform in the same parent frame.
+ * @param message Pose with translation in metres and a unit quaternion.
+ * @return RML transformation matrix.
+ * @throws std::invalid_argument If the quaternion is nonfinite or not unit length.
+ * @note Callers validate translation finiteness at the feedback or command boundary.
+ */
 inline Eigen::TransformationMatrix MessageToPose(const geometry_msgs::msg::Pose& message)
 {
     Eigen::Quaterniond orientation(
@@ -41,6 +59,7 @@ inline Eigen::TransformationMatrix MessageToPose(const geometry_msgs::msg::Pose&
     return frame;
 }
 
+/** @brief Return the canonical ROS joint names, panda_joint1 through panda_joint7. */
 inline std::vector<std::string> JointNames()
 {
     std::vector<std::string> names;

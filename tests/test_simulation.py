@@ -111,6 +111,7 @@ class SimulationTest(unittest.TestCase):
         self.node.destroy_node()
 
     def start(self, command):
+        """Start an isolated process group and retain its output for failure diagnostics."""
         log = tempfile.TemporaryFile(mode='w+')
         environment = dict(os.environ, RCUTILS_COLORIZED_OUTPUT='0')
         self.processes.append(subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
@@ -119,6 +120,7 @@ class SimulationTest(unittest.TestCase):
         return self.processes[-1]
 
     def until(self, condition, timeout=10.0):
+        """Spin until a condition holds, failing early if a child exits; timeout uses wall seconds."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             rclpy.spin_once(self.node, timeout_sec=0.02)
@@ -131,6 +133,7 @@ class SimulationTest(unittest.TestCase):
         self.fail('Timed out waiting for condition; control=' + str(self.control))
 
     def call(self, kind, name, **fields):
+        """Send one service request, wait while spinning and release the temporary client."""
         client = self.node.create_client(kind, name)
         self.assertTrue(client.wait_for_service(timeout_sec=15.0), name)
         request = kind.Request()
@@ -143,6 +146,7 @@ class SimulationTest(unittest.TestCase):
         return result
 
     def command(self, command_type, **fields):
+        """Send an operator command to this test namespace."""
         return self.call(ControlCommand, 'srv/control_command', command_type=command_type, **fields)
 
     def test_complete_launch_and_tcp(self):
@@ -343,6 +347,7 @@ class SimulationTest(unittest.TestCase):
         self.assertFalse(self.state.control_active)
 
     def start_control_stack(self):
+        """Start and enable the simulator/controllers needed by process-loss tests."""
         simulator = self.start(['ros2', 'run', 'fer_sim', 'simulator_node', '--ros-args',
                                 '-r', f'__ns:={self.namespace}'])
         dynamic = self.start(['ros2', 'run', 'fer_ctrl', 'dynamic_control_node', '--ros-args',
@@ -363,6 +368,7 @@ class SimulationTest(unittest.TestCase):
         return simulator, dynamic, kinematic
 
     def stop_process(self, process):
+        """Stop one child intentionally so failure monitoring accepts its exit."""
         self.expected_exits.add(process.pid)
         os.killpg(process.pid, signal.SIGINT)
         process.wait(timeout=8.0)

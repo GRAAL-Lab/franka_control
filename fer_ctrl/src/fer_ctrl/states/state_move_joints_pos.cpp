@@ -34,7 +34,7 @@ bool MoveJointsPos::SetJointsGoal(const CommandRequest& request)
             jointsGoal[joint] += robotInfo->feedback.jointPosition[joint];
         }
     }
-    if (!JointsWithinLimits(jointsGoal, conf->jointLimitMargin)) {
+    if (!JointsWithinLimits(jointsGoal, configuration->jointLimitMargin)) {
         robotInfo->status = "Joint goal must be finite and within the Panda limits and configured margin";
         return false;
     }
@@ -50,11 +50,11 @@ fsm::retval MoveJointsPos::Execute()
     task->Reference() = robotInfo->jointsGoal;
     robotInfo->jointError = (robotInfo->jointsGoal - robotInfo->feedback.jointPosition).cwiseAbs().maxCoeff();
 
-    if (robotInfo->jointError < conf->jointErrorThreshold
+    if (robotInfo->jointError < configuration->jointErrorThreshold
         && robotInfo->feedback.jointVelocity.cwiseAbs().maxCoeff() < 0.03) {
         return ChangeState(completionState_, "Joint goal reached");
     }
-    if (robotInfo->currentTime - robotInfo->stateEntryTime > conf->moveTimeout) {
+    if (robotInfo->currentTime - robotInfo->stateEntryTime > configuration->moveTimeout) {
         return ChangeState(ID::states::idle, "Joint move timed out");
     }
     return fsm::ok;

@@ -10,7 +10,7 @@ Unparking::Unparking()
 
 fsm::retval Unparking::OnEntry()
 {
-    robotInfo->jointsGoal = conf->unparkedJointsPos;
+    robotInfo->jointsGoal = configuration->unparkedJointsPos;
     return GenericState::OnEntry();
 }
 

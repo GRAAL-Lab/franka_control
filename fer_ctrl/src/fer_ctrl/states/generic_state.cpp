@@ -26,7 +26,7 @@ fsm::retval GenericState::OnEntry()
     bool moving = stateName_ == ID::states::move_joints_pos || stateName_ == ID::states::move_joints_vel
         || stateName_ == ID::states::move_cartesian || stateName_ == ID::states::parking
         || stateName_ == ID::states::unparking;
-    if (!actionManager->SetAction(actionName_, moving && conf->actionTransitionDuration > 0.0)) {
+    if (!actionManager->SetAction(actionName_, moving && configuration->actionTransitionDuration > 0.0)) {
         throw std::runtime_error("Cannot select task-priority action: " + actionName_);
     }
     return fsm::ok;

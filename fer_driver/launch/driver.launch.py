@@ -9,6 +9,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Launch the hardware arm and optional gripper with system time."""
     driver_configuration = str(Path(get_package_share_directory('fer_driver')) / 'conf/driver.yaml')
     dynamic_configuration = str(Path(get_package_share_directory('fer_ctrl')) / 'conf/dcl_fer.conf')
 

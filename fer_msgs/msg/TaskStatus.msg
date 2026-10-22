@@ -1,3 +1,5 @@
+# Motion errors: joint/angular in radians, linear in metres.
+# Per-task activation/reference arrays follow the task dimension; summary messages leave them empty.
 std_msgs/Header header
 string action
 float64 joint_error

@@ -1,3 +1,5 @@
+/** @file ctrl_defines.hpp */
+
 #ifndef FER_CTRL_CTRL_DEFINES_HPP
 #define FER_CTRL_CTRL_DEFINES_HPP
 
@@ -35,21 +37,26 @@ inline const std::string toolOrientation = "ToolCartesianOrientation";
 }
 }
 
+/** @brief Controller command: joint angles use radians, Cartesian positions metres, and RPY radians. */
 struct CommandRequest {
     std::string commandType;
     std::string moveType = "absolute";
     std::vector<double> jointSetpoint;
+    /** @brief Zero-based joint index for a single-joint command. */
     int jointIndex = 0;
     Eigen::Vector3d targetPosition = Eigen::Vector3d::Zero();
     rml::EulerRPY targetOrientation;
+    /** @brief Cartesian reference frame: 0 for the tool frame, 1 for the base frame. */
     int frameType = 1;
 };
 
+/** @brief Command acceptance result and an explanation suitable for the ROS service response. */
 struct CommandResult {
     bool success = false;
     std::string message;
 };
 
+/** @brief Validated driver feedback; tool pose and Jacobian are expressed in the robot base frame. */
 struct RobotFeedback {
     JointVector jointPosition = HomeJointPosition();
     JointVector jointVelocity = JointVector::Zero();
@@ -62,12 +69,17 @@ struct RobotFeedback {
     bool hasError = false;
 };
 
+/** @brief Plane n.dot(position) + offset = 0 in the base frame; positive distance is the safe side. */
 struct PlaneObstacleConfiguration {
     std::string name;
     Eigen::Vector3d normal = Eigen::Vector3d::UnitZ();
     double offset = -0.1;
 };
 
+/**
+ * @brief Kinematic control settings: rates in Hz, times in seconds, distances in metres and angles in
+ * radians.
+ */
 struct KCLConfiguration {
     double loopRate = 100.0;
     double linearErrorThreshold = 0.002;
@@ -85,9 +97,19 @@ struct KCLConfiguration {
     JointVector unparkedJointsPos = HomeJointPosition();
     std::vector<PlaneObstacleConfiguration> obstacles;
 
+    /**
+     * @brief Read and validate kinematic settings, postures and obstacle planes.
+     * @param configuration Parsed kcl_fer.conf settings.
+     * @throws std::exception If required settings are missing or values are invalid.
+     */
     void ConfigureFromFile(libconfig::Config& configuration);
 };
 
+/**
+ * @brief State shared by the controller commands and FSM states.
+ * @details All time fields use seconds from the clock supplied to TaskPriorityController.
+ * Access is serialized by the owning controller; this structure does not provide locking.
+ */
 struct RobotInfo {
     RobotFeedback feedback;
     bool receivingFeedback = false;
@@ -105,12 +127,14 @@ struct RobotInfo {
     double angularError = 0.0;
 };
 
+/** @brief Task instance registered under its configured task identifier. */
 struct TaskInfo {
     std::shared_ptr<tpik::Task> task;
 };
 
 using TasksMap = std::unordered_map<std::string, TaskInfo>;
 
+/** @brief Joint velocity command in rad/s and task errors in radians/metres for one control cycle. */
 struct ControlOutput {
     JointVector jointVelocity = JointVector::Zero();
     double jointError = 0.0;

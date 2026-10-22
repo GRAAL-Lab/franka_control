@@ -1,3 +1,4 @@
+# Kinematic output: velocity in rad/s; target_pose is expressed in header.frame_id.
 std_msgs/Header header
 string ctrl_state
 bool control_enabled

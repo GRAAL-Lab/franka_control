@@ -1,3 +1,5 @@
+/** @file command_move_joints_pos.hpp */
+
 #ifndef FER_CTRL_COMMAND_MOVE_JOINTS_POS_HPP
 #define FER_CTRL_COMMAND_MOVE_JOINTS_POS_HPP
 
@@ -6,8 +8,13 @@
 namespace fer {
 namespace commands {
 
+/** @brief Validate a joint position goal and request the joint position motion state. */
 class MoveJointsPos : public GenericCommand {
 public:
+    /**
+     * @brief Execute the stored request using the bound FSM and shared robot state.
+     * @return fsm::ok on acceptance, or the validation/transition failure code.
+     */
     fsm::retval Execute() override;
 };
 

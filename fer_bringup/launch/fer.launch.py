@@ -11,10 +11,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def package_file(package_name, relative_path):
+    """Resolve a path inside an installed ROS package share directory."""
     return str(Path(get_package_share_directory(package_name)) / relative_path)
 
 
 def include_launch(package_name, filename, arguments, condition=None):
+    """Include a package launch file with explicit arguments and an optional condition."""
     launch_file = package_file(package_name, 'launch/' + filename)
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_file),
@@ -24,6 +26,7 @@ def include_launch(package_name, filename, arguments, condition=None):
 
 
 def generate_launch_description():
+    """Launch the selected backend and pass one simulation clock choice to the stack."""
     namespace = LaunchConfiguration('namespace')
     dynamic_configuration = LaunchConfiguration('dcl_config')
     is_sim = LaunchConfiguration('isSim')
@@ -38,7 +41,8 @@ def generate_launch_description():
         DeclareLaunchArgument('with_tcp', default_value='false'),
         DeclareLaunchArgument('tcp_host', default_value='127.0.0.1'),
         DeclareLaunchArgument('tcp_port', default_value='9999'),
-        DeclareLaunchArgument('controller_config', default_value=package_file('fer_ctrl', 'conf/controller.yaml')),
+        DeclareLaunchArgument(
+            'controller_config', default_value=package_file('fer_ctrl', 'conf/controller.yaml')),
         DeclareLaunchArgument('kcl_config', default_value=package_file('fer_ctrl', 'conf/kcl_fer.conf')),
         DeclareLaunchArgument('dcl_config', default_value=package_file('fer_ctrl', 'conf/dcl_fer.conf')),
         DeclareLaunchArgument('driver_config', default_value=package_file('fer_driver', 'conf/driver.yaml')),

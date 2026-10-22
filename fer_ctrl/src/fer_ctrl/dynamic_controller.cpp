@@ -70,9 +70,9 @@ void DCLConfiguration::Validate() const
 }
 
 JointReferenceGenerator::JointReferenceGenerator(const DCLConfiguration& configuration)
-    : conf_(configuration)
+    : configuration_(configuration)
 {
-    conf_.Validate();
+    configuration_.Validate();
 }
 
 void JointReferenceGenerator::Reset(const JointVector& jointPosition)
@@ -98,27 +98,32 @@ const JointReference& JointReferenceGenerator::Run(
     if (!std::isfinite(sampleTime) || sampleTime <= 0.0) {
         return reference_;
     }
+    const auto& settings = configuration_;
     sampleTime = std::min(sampleTime, 0.02);
     for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
-        double targetVelocity
-            = std::clamp(requestedVelocity[joint], -conf_.maxJointVelocity, conf_.maxJointVelocity);
+        // Bound velocity, then approach it with acceleration and jerk limits.
+        const double targetVelocity
+            = std::clamp(requestedVelocity[joint], -settings.maxJointVelocity, settings.maxJointVelocity);
         double targetAcceleration
-            = conf_.referenceVelocityGain * (targetVelocity - reference_.velocity[joint]);
+            = settings.referenceVelocityGain * (targetVelocity - reference_.velocity[joint]);
         targetAcceleration
-            = std::clamp(targetAcceleration, -conf_.maxJointAcceleration, conf_.maxJointAcceleration);
-        double accelerationChange = targetAcceleration - reference_.acceleration[joint];
-        reference_.acceleration[joint] += std::clamp(
-            accelerationChange, -conf_.maxJointJerk * sampleTime, conf_.maxJointJerk * sampleTime);
-        double previousVelocity = reference_.velocity[joint];
+            = std::clamp(targetAcceleration, -settings.maxJointAcceleration, settings.maxJointAcceleration);
+        const double accelerationChange = targetAcceleration - reference_.acceleration[joint];
+        const double maximumAccelerationChange = settings.maxJointJerk * sampleTime;
+        reference_.acceleration[joint]
+            += std::clamp(accelerationChange, -maximumAccelerationChange, maximumAccelerationChange);
+        // Trapezoidal integration keeps position continuous across reference changes.
+        const double previousVelocity = reference_.velocity[joint];
         reference_.velocity[joint] += reference_.acceleration[joint] * sampleTime;
         reference_.velocity[joint]
-            = std::clamp(reference_.velocity[joint], -conf_.maxJointVelocity, conf_.maxJointVelocity);
+            = std::clamp(reference_.velocity[joint], -settings.maxJointVelocity, settings.maxJointVelocity);
         reference_.position[joint] += 0.5 * (previousVelocity + reference_.velocity[joint]) * sampleTime;
 
-        double lower = std::max(JointLimitsMin()[joint] + conf_.jointLimitMargin,
-            measuredPosition[joint] - conf_.maxTrackingError);
-        double upper = std::min(JointLimitsMax()[joint] - conf_.jointLimitMargin,
-            measuredPosition[joint] + conf_.maxTrackingError);
+        // Bound position by both the measured tracking error and joint-limit margin.
+        double lower = std::max(JointLimitsMin()[joint] + settings.jointLimitMargin,
+            measuredPosition[joint] - settings.maxTrackingError);
+        double upper = std::min(JointLimitsMax()[joint] - settings.jointLimitMargin,
+            measuredPosition[joint] + settings.maxTrackingError);
         // A measured joint outside the software margin must still be allowed to retreat.
         lower = std::min(lower, measuredPosition[joint]);
         upper = std::max(upper, measuredPosition[joint]);
@@ -128,21 +133,22 @@ const JointReference& JointReferenceGenerator::Run(
 }
 
 DynamicController::DynamicController(const DCLConfiguration& configuration)
-    : conf_(configuration)
+    : configuration_(configuration)
 {
-    conf_.Validate();
+    configuration_.Validate();
 }
 
 bool DynamicController::ComputeTorques(const JointReference& reference, const JointVector& jointPosition,
     const JointVector& jointVelocity, const JointMatrix& massMatrix, const JointVector& coriolis,
     const JointVector& previousTorque, double sampleTime, JointVector& commandedTorque) const
 {
+    const auto& settings = configuration_;
     commandedTorque.setZero();
     if (!jointPosition.allFinite() || !jointVelocity.allFinite() || !massMatrix.allFinite()
         || !coriolis.allFinite() || !previousTorque.allFinite() || !reference.position.allFinite()
         || !reference.velocity.allFinite() || !reference.acceleration.allFinite()
         || !std::isfinite(sampleTime) || sampleTime <= 0.0
-        || (previousTorque.cwiseAbs().array() > conf_.torqueLimit.array() + 1e-6).any()
+        || (previousTorque.cwiseAbs().array() > settings.torqueLimit.array() + 1e-6).any()
         || (massMatrix - massMatrix.transpose()).norm() > 1e-6) {
         return false;
     }
@@ -152,14 +158,14 @@ bool DynamicController::ComputeTorques(const JointReference& reference, const Jo
     }
 
     JointVector positionError = reference.position - jointPosition;
-    positionError = positionError.cwiseMax(-conf_.maxTrackingError).cwiseMin(conf_.maxTrackingError);
-    JointVector velocityError = reference.velocity - jointVelocity;
-    JointVector feedback
-        = conf_.positionGain.cwiseProduct(positionError) + conf_.velocityGain.cwiseProduct(velocityError);
-    if (conf_.controlMode == "ComputedTorque") {
-        commandedTorque = massMatrix * (reference.acceleration + feedback) + coriolis;
+    positionError = positionError.cwiseMax(-settings.maxTrackingError).cwiseMin(settings.maxTrackingError);
+    const JointVector velocityError = reference.velocity - jointVelocity;
+    const JointVector feedbackCorrection = settings.positionGain.cwiseProduct(positionError)
+        + settings.velocityGain.cwiseProduct(velocityError);
+    if (settings.controlMode == "ComputedTorque") {
+        commandedTorque = massMatrix * (reference.acceleration + feedbackCorrection) + coriolis;
     } else {
-        commandedTorque = feedback + coriolis;
+        commandedTorque = feedbackCorrection + coriolis;
     }
     if (!commandedTorque.allFinite()) {
         return false;
@@ -168,8 +174,8 @@ bool DynamicController::ComputeTorques(const JointReference& reference, const Jo
     // libfranka compensates gravity internally. Adding model.gravity() here would count it twice.
     for (std::size_t joint = 0; joint < ARM_JOINTS; ++joint) {
         double limitedTorque
-            = std::clamp(commandedTorque[joint], -conf_.torqueLimit[joint], conf_.torqueLimit[joint]);
-        double maximumChange = conf_.torqueRateLimit[joint] * sampleTime;
+            = std::clamp(commandedTorque[joint], -settings.torqueLimit[joint], settings.torqueLimit[joint]);
+        double maximumChange = settings.torqueRateLimit[joint] * sampleTime;
         commandedTorque[joint] = std::clamp(
             limitedTorque, previousTorque[joint] - maximumChange, previousTorque[joint] + maximumChange);
     }

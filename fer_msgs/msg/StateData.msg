@@ -1,3 +1,5 @@
+# Driver feedback in header.frame_id (the configured base frame).
+# JointState uses rad, rad/s and Nm, ordered Panda joints 1..7; tool_pose uses metres.
 std_msgs/Header header
 sensor_msgs/JointState joint_state
 geometry_msgs/Pose tool_pose

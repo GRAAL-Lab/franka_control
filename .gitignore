@@ -73,3 +73,6 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Generated Doxygen API reference
+docs/api/

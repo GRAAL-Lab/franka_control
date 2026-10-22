@@ -1,3 +1,5 @@
+/** @file franka_gripper.hpp */
+
 #ifndef FER_DRIVER_FRANKA_GRIPPER_HPP
 #define FER_DRIVER_FRANKA_GRIPPER_HPP
 
@@ -10,13 +12,24 @@
 
 namespace fer {
 
+/**
+ * @brief Hardware gripper service and state publisher using a reentrant callback group.
+ * @details An atomic busy flag serializes motion commands; stop can interrupt a blocking move.
+ * The state mutex protects the cached ROS state and error message.
+ */
 class FrankaGripper : public rclcpp::Node {
 public:
+    /** @brief Connect the gripper and create its command service and wall-clock state timer. */
     FrankaGripper();
 
 private:
-    void CommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+    /**
+     * @brief Validate and execute a blocking gripper operation; return rejection when a motion is already
+     * busy.
+     */
+    void HandleGripperCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
         fer_msgs::srv::DriverCommand::Response::SharedPtr response);
+    /** @brief Publish a fresh measurement, or the cached timestamped state while a motion is busy. */
     void PublishState();
 
     std::unique_ptr<franka::Gripper> gripper_;

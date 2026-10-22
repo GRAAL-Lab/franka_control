@@ -8,6 +8,12 @@
 #include <future>
 
 namespace fer {
+namespace {
+
+constexpr std::size_t MAX_PENDING_COMMANDS = 64;
+constexpr double COMMAND_RESPONSE_TIMEOUT = 5.0; // Seconds on the owning node's clock.
+
+}
 
 ArmCommandParser::ArmCommandParser(rclcpp::Node* node)
     : node_(node)
@@ -79,7 +85,8 @@ bool ArmCommandParser::ParseCommand(
     case JOINTS_MOVE_ABS: {
         expectedLength = sizeof(JointsMoveAbs) - HEADER_SIZE;
         request.command_type = "move_joints_pos";
-        std::array<double, 7> joints;
+        // Packed doubles may be unaligned; copy the payload before reading the joint values.
+        std::array<double, ARM_JOINTS> joints;
         std::memcpy(joints.data(), reinterpret_cast<const char*>(&message) + HEADER_SIZE, sizeof(joints));
         request.joint_setpoint.assign(joints.begin(), joints.end());
         break;
@@ -131,13 +138,14 @@ bool ArmCommandParser::ParseCommand(
         return false;
     }
 
-    auto finite = [](double value) { return std::isfinite(value); };
-    return message.header.length == expectedLength && request.joint_index >= 0 && request.joint_index < 7
+    auto isFinite = [](double value) { return std::isfinite(value); };
+    return message.header.length == expectedLength && request.joint_index >= 0
+        && request.joint_index < static_cast<int>(ARM_JOINTS)
         && (request.frame_type == request.BASE || request.frame_type == request.EE)
-        && std::all_of(request.joint_setpoint.begin(), request.joint_setpoint.end(), finite)
-        && std::all_of(request.target_position.begin(), request.target_position.end(), finite)
-        && std::all_of(request.target_orientation.begin(), request.target_orientation.end(), finite)
-        && finite(request.gripper_setpoint) && finite(request.grasp_force);
+        && std::all_of(request.joint_setpoint.begin(), request.joint_setpoint.end(), isFinite)
+        && std::all_of(request.target_position.begin(), request.target_position.end(), isFinite)
+        && std::all_of(request.target_orientation.begin(), request.target_orientation.end(), isFinite)
+        && isFinite(request.gripper_setpoint) && isFinite(request.grasp_force);
 }
 
 bool ArmCommandParser::ParseAndSendCommand(const ArmProtocol::ArmCommandMessage& message)
@@ -148,11 +156,12 @@ bool ArmCommandParser::ParseAndSendCommand(const ArmProtocol::ArmCommandMessage&
             message.header.msgId);
         return false;
     }
-    if (!controlCommandClient_->service_is_ready() || pendingCommands_.size() >= 64) {
+    if (!controlCommandClient_->service_is_ready() || pendingCommands_.size() >= MAX_PENDING_COMMANDS) {
         RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] Controller unavailable or command queue full");
         return false;
     }
-    pendingCommands_.push_back({ controlCommandClient_->async_send_request(request), node_->now().seconds() });
+    pendingCommands_.push_back(
+        { controlCommandClient_->async_send_request(request), node_->now().seconds() });
     return true;
 }
 
@@ -167,7 +176,7 @@ void ArmCommandParser::CheckResponses()
                 RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] %s", response->res.c_str());
             }
             command = pendingCommands_.erase(command);
-        } else if (node_->now().seconds() - command->sendTime > 5.0) {
+        } else if (node_->now().seconds() - command->sendTime > COMMAND_RESPONSE_TIMEOUT) {
             controlCommandClient_->remove_pending_request(command->future);
             RCLCPP_WARN(node_->get_logger(), "[Cmd Parser] Controller service timed out");
             command = pendingCommands_.erase(command);

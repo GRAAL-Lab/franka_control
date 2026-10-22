@@ -10,7 +10,7 @@ Parking::Parking()
 
 fsm::retval Parking::OnEntry()
 {
-    robotInfo->jointsGoal = conf->parkedJointsPos;
+    robotInfo->jointsGoal = configuration->parkedJointsPos;
     return GenericState::OnEntry();
 }
 

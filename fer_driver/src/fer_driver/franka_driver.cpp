@@ -15,10 +15,10 @@ FrankaDriver::FrankaDriver()
     : Node("driver_node")
 {
     LoadConfiguration();
-    dynamicController_ = std::make_unique<DynamicController>(conf_);
-    stopReferenceGenerator_ = std::make_unique<JointReferenceGenerator>(conf_);
-    Initialization();
-    controlThread_ = std::thread(&FrankaDriver::Run, this);
+    dynamicController_ = std::make_unique<DynamicController>(configuration_);
+    stopReferenceGenerator_ = std::make_unique<JointReferenceGenerator>(configuration_);
+    InitializeROSInterfaces();
+    controlThread_ = std::thread(&FrankaDriver::RunRobotThread, this);
 }
 
 FrankaDriver::~FrankaDriver()
@@ -33,7 +33,7 @@ FrankaDriver::~FrankaDriver()
 void FrankaDriver::LoadConfiguration()
 {
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/dcl_fer.conf";
-    conf_.LoadConfiguration(declare_parameter("dynamic_configuration_file", defaultFile));
+    configuration_.LoadConfiguration(declare_parameter("dynamic_configuration_file", defaultFile));
     robotAddress_ = declare_parameter("robot_ip", "172.16.0.2");
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
     commandTimeout_ = declare_parameter("command_timeout", 0.2);
@@ -45,21 +45,21 @@ void FrankaDriver::LoadConfiguration()
     }
 }
 
-void FrankaDriver::Initialization()
+void FrankaDriver::InitializeROSInterfaces()
 {
     dynamicControlSub_ = create_subscription<fer_msgs::msg::DynamicControlData>(topicnames::dynamic_control,
-        rclcpp::QoS(1).reliable(), std::bind(&FrankaDriver::DynamicControlCB, this, _1));
+        rclcpp::QoS(1).reliable(), std::bind(&FrankaDriver::HandleDynamicControl, this, _1));
     stateDataPub_ = create_publisher<fer_msgs::msg::StateData>(
         topicnames::state_data, rclcpp::SensorDataQoS().keep_last(1));
     jointStatePub_ = create_publisher<sensor_msgs::msg::JointState>(
         topicnames::joint_states, rclcpp::SensorDataQoS().keep_last(1));
     commandService_ = create_service<fer_msgs::srv::DriverCommand>(
-        topicnames::driver_command, std::bind(&FrankaDriver::CommandsHandler, this, _1, _2));
+        topicnames::driver_command, std::bind(&FrankaDriver::HandleDriverCommand, this, _1, _2));
     publishTimer_ = create_wall_timer(
         std::chrono::duration<double>(1.0 / publishRate_), std::bind(&FrankaDriver::PublishFeedback, this));
 }
 
-void FrankaDriver::DynamicControlCB(const fer_msgs::msg::DynamicControlData& message)
+void FrankaDriver::HandleDynamicControl(const fer_msgs::msg::DynamicControlData& message)
 {
     ControlReference command;
     command.receivedTime = SteadyTime();
@@ -68,8 +68,9 @@ void FrankaDriver::DynamicControlCB(const fer_msgs::msg::DynamicControlData& mes
     JointVector velocity = Eigen::Map<const JointVector>(message.joint_velocities.data());
     JointVector acceleration = Eigen::Map<const JointVector>(message.joint_accelerations.data());
     if (!position.allFinite() || !velocity.allFinite() || !acceleration.allFinite()
-        || !JointsWithinLimits(position) || velocity.cwiseAbs().maxCoeff() > conf_.maxJointVelocity + 1e-9
-        || acceleration.cwiseAbs().maxCoeff() > conf_.maxJointAcceleration + 1e-9
+        || !JointsWithinLimits(position)
+        || velocity.cwiseAbs().maxCoeff() > configuration_.maxJointVelocity + 1e-9
+        || acceleration.cwiseAbs().maxCoeff() > configuration_.maxJointAcceleration + 1e-9
         || message.header.frame_id != baseFrame_) {
         SetError("Invalid dynamic joint reference");
         command.enabled = false;
@@ -81,7 +82,7 @@ void FrankaDriver::DynamicControlCB(const fer_msgs::msg::DynamicControlData& mes
     commandBuffer_.Publish(command);
 }
 
-void FrankaDriver::CommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+void FrankaDriver::HandleDriverCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
     fer_msgs::srv::DriverCommand::Response::SharedPtr response)
 {
     response->success = true;
@@ -135,7 +136,7 @@ void FrankaDriver::Recover()
     recovering_.store(false);
 }
 
-void FrankaDriver::Run()
+void FrankaDriver::RunRobotThread()
 {
     FeedbackSnapshot snapshot;
     try {
@@ -153,7 +154,7 @@ void FrankaDriver::Run()
             if (enableRequested_.load() && !hasError_.load() && controlReference_.enabled && commandFresh) {
                 RunControlLoop();
             } else {
-                snapshot = ReadSnapshot(robot_->readOnce(), false);
+                snapshot = CaptureFeedback(robot_->readOnce(), false);
                 feedbackBuffer_.Publish(snapshot);
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
@@ -182,7 +183,7 @@ void FrankaDriver::RunControlLoop()
     jointReference_.acceleration = Eigen::Map<const JointVector>(controlReference_.acceleration.data());
     controlActive_.store(true);
     try {
-        robot_->control(std::bind(&FrankaDriver::TorqueControlCB, this, _1, _2), true, 100.0);
+        robot_->control(std::bind(&FrankaDriver::ComputeTorqueCommand, this, _1, _2), true, 100.0);
         if (watchdogExpired_) {
             SetError("Dynamic command watchdog expired; recover before enabling");
         } else if (invalidDynamics_) {
@@ -197,7 +198,7 @@ void FrankaDriver::RunControlLoop()
     enableRequested_.store(false);
 }
 
-franka::Torques FrankaDriver::TorqueControlCB(const franka::RobotState& state, franka::Duration period)
+franka::Torques FrankaDriver::ComputeTorqueCommand(const franka::RobotState& state, franka::Duration period)
 {
     commandBuffer_.Consume(controlReference_);
     double currentTime = SteadyTime();
@@ -223,7 +224,7 @@ franka::Torques FrankaDriver::TorqueControlCB(const franka::RobotState& state, f
         jointReference_.acceleration = Eigen::Map<const JointVector>(controlReference_.acceleration.data());
     }
 
-    FeedbackSnapshot snapshot = ReadSnapshot(state, true);
+    FeedbackSnapshot snapshot = CaptureFeedback(state, true);
     feedbackBuffer_.Publish(snapshot);
     if (sampleTime <= 0.0) {
         return franka::Torques(state.tau_J_d);
@@ -255,7 +256,8 @@ franka::Torques FrankaDriver::TorqueControlCB(const franka::RobotState& state, f
     return output;
 }
 
-FrankaDriver::FeedbackSnapshot FrankaDriver::ReadSnapshot(const franka::RobotState& state, bool controlActive)
+FrankaDriver::FeedbackSnapshot FrankaDriver::CaptureFeedback(
+    const franka::RobotState& state, bool controlActive)
 {
     FeedbackSnapshot snapshot;
     snapshot.position = state.q;

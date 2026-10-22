@@ -1,3 +1,5 @@
+/** @file armprotocol.h */
+
 #ifndef FER_TCP_BRIDGE_ARMPROTOCOL_H
 #define FER_TCP_BRIDGE_ARMPROTOCOL_H
 
@@ -6,9 +8,17 @@
 #include <map>
 #include <string>
 
+/**
+ * @brief Packed Undroid-compatible binary commands and reports.
+ * @details Native little-endian integers and IEEE doubles, without padding. Lengths
+ * exclude the 12-byte header. Positions use metres, angles radians and joints zero-based indices.
+ * Numeric identifiers and field order form the wire ABI and must remain stable.
+ */
 namespace ArmProtocol {
 
+/** @brief Protocol reference frames; the FER parser accepts EE and BASE. */
 enum FrameType : int32_t { EE = 0, BASE, LOCAL, WORLD };
+/** @brief Wire status codes reported by the controller bridge. */
 enum ArmStatusEnum : int32_t {
     DISABLED = 0,
     UNPARKING,
@@ -22,7 +32,9 @@ enum ArmStatusEnum : int32_t {
     ENABLING,
     MAX_ARM_STATUS_ENUM
 };
+/** @brief Cartesian translation and RPY axis identifiers. */
 enum AxisId : int32_t { X_AXIS = 0, Y_AXIS, Z_AXIS, ROLL_AXIS, PITCH_AXIS, YAW_AXIS, MAX_AXIS_ID };
+/** @brief Stable command identifiers; not every legacy command is supported by FER. */
 enum CmdMsgId : uint32_t {
     EMERGENCY_STOP = 0,
     ARM_HOMING,
@@ -45,6 +57,7 @@ enum CmdMsgId : uint32_t {
     ARM_RECOVER,
     MAX_CMD_MSG_ID
 };
+/** @brief Stable report identifiers, including retained legacy identifiers. */
 enum RptMsgId : uint32_t {
     ARM_STATUS = 0,
     JOINTS_POSITION,
@@ -58,78 +71,95 @@ enum RptMsgId : uint32_t {
 // Undroid framing: native little-endian integers/doubles, with no struct padding.
 // length is the payload size, excluding the 12-byte header. Angles use radians.
 #pragma pack(push, 1)
+/** @brief Common wire header: destination, message identifier and payload byte count. */
 struct ArmProtocolHeader {
     uint32_t destination;
     uint32_t msgId;
     uint32_t length;
 };
+/** @brief Signed protocol status code. */
 struct ArmStatusCode {
     int32_t code;
 };
+/** @brief Absolute base-frame tool position in metres and roll/pitch/yaw in radians. */
 struct EffectorMoveAbs {
     ArmProtocolHeader header;
     double x, y, z, roll, pitch, yaw;
 };
+/** @brief Relative tool displacement in the selected frame: metres and RPY radians. */
 struct EffectorMoveRel {
     ArmProtocolHeader header;
     FrameType frame;
     double delta_x, delta_y, delta_z, delta_roll, delta_pitch, delta_yaw;
 };
+/** @brief Relative displacement along one selected Cartesian/RPY axis. */
 struct EffectorAxisMoveRel {
     ArmProtocolHeader header;
     int32_t frame;
     int32_t axis_id;
     double delta_axis;
 };
+/** @brief Absolute positions for Panda joints 1 through 7, in radians. */
 struct JointsMoveAbs {
     ArmProtocolHeader header;
     double q1, q2, q3, q4, q5, q6, q7;
 };
+/** @brief Absolute position in radians for one zero-based joint index. */
 struct JointMoveAbs {
     ArmProtocolHeader header;
     int32_t id;
     double qi;
 };
+/** @brief Relative position increment in radians for one zero-based joint index. */
 struct JointMoveRel {
     ArmProtocolHeader header;
     int32_t id;
     double delta_qi;
 };
+/** @brief Velocity in rad/s for one zero-based joint index. */
 struct JointMoveVel {
     ArmProtocolHeader header;
     int32_t id;
     double velocity;
 };
+/** @brief Gripper opening percentage in the inclusive range 0..100. */
 struct GripperMove {
     ArmProtocolHeader header;
     double percentage;
 };
+/** @brief Grasp request with force in newtons. */
 struct GripperGrasp {
     ArmProtocolHeader header;
     double force; // Franka grasp force in N; Undroid used a motor-current threshold.
 };
+/** @brief Controller state report. */
 struct ArmStatus {
     ArmProtocolHeader header;
     ArmStatusCode status;
 };
+/** @brief Joint positions in radians followed by gripper opening percentage. */
 struct JointsPosition {
     ArmProtocolHeader header;
     double q1, q2, q3, q4, q5, q6, q7;
     double pincers; // Opening percentage, as in Undroid.
 };
+/** @brief Measured base-frame tool position in metres and RPY orientation in radians. */
 struct EffectorPosition {
     ArmProtocolHeader header;
     double x, y, z, roll, pitch, yaw;
 };
+/** @brief Legacy report name; FER sends measured joint torques in Nm in the seven joint fields. */
 struct MotorsCurrent {
     ArmProtocolHeader header;
     double q1_current, q2_current, q3_current, q4_current, q5_current, q6_current, q7_current;
     // The original report ID is retained; FER reports joint torque in Nm.
 };
+/** @brief Gripper grasp-state report; isLocked is zero or one. */
 struct GripperLocked {
     ArmProtocolHeader header;
     int32_t isLocked;
 };
+/** @brief Storage for a header-only command or the largest supported command payload. */
 union ArmCommandMessage {
     ArmProtocolHeader header;
     GripperGrasp grasp;
@@ -142,6 +172,7 @@ union ArmCommandMessage {
     EffectorMoveRel effectorMoveRel;
     EffectorMoveAbs effectorMoveAbs;
 };
+/** @brief Storage for a header-only report or the largest supported report payload. */
 union ArmReportMessage {
     ArmProtocolHeader header;
     EffectorPosition effectorPosition;

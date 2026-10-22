@@ -7,16 +7,16 @@ ROS2 package and node layout.
 
 | Role | Implementation |
 | --- | --- |
-| Kinematic ROS node | `fer_ctrl::KinematicController` |
-| Command/state/task core | `fer_ctrl::TaskPriorityController`, `fsm::FSM` |
+| Kinematic ROS node | `fer::KinematicController` |
+| Command/state/task core | `fer::TaskPriorityController`, `fsm::FSM` |
 | Task and action solver | IKCL tasks, `tpik::ActionManager`, `tpik::iCAT`, `tpik::Solver` |
 | Kinematic configuration | `fer_ctrl/conf/kcl_fer.conf` |
-| ROS dynamic reference generator | `fer_ctrl::DynamicControlNode`, `JointReferenceGenerator` |
-| Realtime dynamic control law | `fer_ctrl::DynamicController` |
+| ROS dynamic reference generator | `fer::DynamicControlNode`, `JointReferenceGenerator` |
+| Realtime dynamic control law | `fer::DynamicController` |
 | Dynamic configuration | `fer_ctrl/conf/dcl_fer.conf` |
-| Hardware backend | `fer_driver::FrankaDriver`, `franka::Robot`, `franka::Model` |
-| Simulation backend | `fer_sim::Simulator`, same dynamic-controller library |
-| Robot model | `fer_model::FrankaArmModel` for RML, `PandaModel` for simulation |
+| Hardware backend | `fer::FrankaDriver`, `franka::Robot`, `franka::Model` |
+| Simulation backend | `fer::Simulator`, same dynamic-controller library |
+| Robot model | `fer::FrankaArmModel : rml::ArmModel` shared by every backend |
 
 ```mermaid
 flowchart LR
@@ -33,7 +33,7 @@ flowchart LR
 ## Task-priority configuration
 
 `kcl_fer.conf` retains the reference file's `tasks`, `priorityLevels`,
-`actions`, and `states` sections. Tasks are constructed in `SetUpTasks()`,
+`actions`, and `states` sections. Tasks are constructed in `CreateTasks()`,
 configured by `ConfigureTasksFromFile()`, grouped by
 `ConfigurePriorityLevelsFromFile()`, and selected through
 `ConfigureActionsFromFile()`.
@@ -57,7 +57,7 @@ avoidance above the motion objective; `MoveTool` also includes a posture level.
 
 The configuration loader rejects missing or unknown tasks, bad vector lengths,
 duplicate levels/actions, unknown references and inconsistent action ordering.
-New task classes are registered in `SetUpTasks()`; changing their gains,
+New task classes are registered in `CreateTasks()`; changing their gains,
 enable flags, saturations, priority grouping or action membership is done in
 the configuration file.
 
@@ -72,7 +72,7 @@ The installed IKCL version's `JointsLimit` loader omits its inherited enable
 flag. A small derived task applies that flag after the standard IKCL
 configuration. The source libraries are not modified.
 
-RML joint origins and the standalone Panda model are checked against each other.
+The shared RML Panda model is checked against reference forward kinematics.
 The driver reports `F_T_EE`; the RML tool attachment is updated from it, including
 the fixed 0.107 m joint-7-to-flange transform.
 
@@ -93,9 +93,9 @@ Idle accepts all commands subject to feedback and driver checks. Joint-position,
 joint-velocity and Cartesian motion states accept replacement motion commands
 and park. Parking and unparking accept stop, disable and Franka recovery only;
 motion commands are rejected. Unpark is allowed from idle or parked. As in
-Undroid, `simulated_driver=true` additionally permits joint-position commands
-from parked. The bringup launch sets this parameter from `use_sim`; standalone
-`control.launch.py` defaults it to false. Self-transitions are not registered;
+Undroid, `isSim=true` additionally permits joint-position commands
+from parked. Bringup passes its global `isSim` argument to the controllers;
+standalone `control.launch.py` defaults it to false. Self-transitions are not registered;
 updating a goal in the current motion state does not run its entry hook again.
 
 ```mermaid
@@ -163,7 +163,7 @@ ROS callbacks only transfer fixed-size references and service intent.
 Two single-producer/single-consumer triple buffers exchange commands and
 feedback without blocking.
 
-`TorqueControlCB()` reads current joints, mass, Coriolis and Jacobian, computes
+`ComputeTorqueCommand()` reads current joints, mass, Coriolis and Jacobian, computes
 torques, and returns `franka::Torques` at 1 kHz. The callback has no ROS
 publications, logging or mutex acquisition; the dynamic law uses fixed-size
 Eigen matrices. The driver enables libfranka's rate limiting and 100 Hz filter.
@@ -174,14 +174,16 @@ measured velocity to settle before returning `MotionFinished`. Invalid model
 data and stop timeouts end the session and latch an error. No previous motion
 resumes without an explicit enable; watchdog errors require explicit recovery.
 
-Each stage has a steady-clock watchdog:
+Each stage has a watchdog using its operating clock:
 
 1. KCL disables on missing robot feedback.
 2. DCL disables on stale KCL commands or feedback.
 3. The driver stops on stale DCL references.
 
-Only newly received feedback snapshots are published. TPIK transition timing is
-fed from the same monotonic clock, including deterministic time in unit tests.
+Only newly received feedback snapshots are published. Simulation controllers
+use the shared ROS `/clock`; TPIK receives that time explicitly in milliseconds.
+Hardware driver watchdogs use steady wall time, while TPIK uses its realtime
+clock when `isSim=false`. Unit tests supply deterministic time with `isSim=true`.
 The driver does not change collision thresholds, payload or end-effector settings.
 Connection loss requires restarting the driver.
 
@@ -216,8 +218,10 @@ Feedback uses sensor-data QoS with depth one; references use reliable QoS with
 depth one. Services report acceptance, with completion observed through state.
 KCL forwards driver requests asynchronously.
 
-`RobotVisualizer` follows the original `LoadConfiguration`, `Initialization`,
-`Run`, `PublishMarkers`, `make6DofMarker` and `interactiveMarkerCB` structure.
+`RobotVisualizer` separates configuration and ROS initialization from its
+periodic `Run`, `ProcessToolCommand` and `PublishMarkers` functions.
+`CreateToolControlMarker` builds the controls and `HandleToolControlFeedback`
+handles drag events.
 Pose updates publish the `ctrl_frame` preview; mouse release queues a Cartesian
 service request. No commands are sent while dragging. Joint-frame TFs use the
 Panda model and the measured tool transform comes from feedback. Plane markers
@@ -242,3 +246,9 @@ dynamic law. Its plant uses configurable diagonal joint inertia and viscous
 damping, with gravity compensation assumed. This validates torque tracking and
 watchdogs without hardware. It does not reproduce full Panda dynamics,
 contacts, collision geometry, or grasped objects.
+
+The simulator owns the global ROS `/clock`. Its wall-timer period is
+`1 / (loop_rate * simTimeScale)`, while each tick advances `1 / loop_rate`
+simulated seconds. Physics substeps remain at most 1 ms. Controller timers,
+action transitions, gripper motion, watchdogs and timestamps follow the same
+simulated timeline.

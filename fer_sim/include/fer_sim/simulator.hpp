@@ -1,3 +1,5 @@
+/** @file simulator.hpp */
+
 #ifndef FER_SIM_SIMULATOR_HPP
 #define FER_SIM_SIMULATOR_HPP
 
@@ -11,25 +13,56 @@
 
 namespace fer {
 
+/**
+ * @brief Numerical arm/gripper driver and owner of the global ROS simulation clock.
+ * @details Each wall-timer tick advances a fixed simulation step. simTimeScale changes
+ * the wall period, so physics, watchdogs and ROS-clock consumers advance together.
+ */
 class Simulator : public rclcpp::Node {
 public:
+    /**
+     * @brief Load simulation parameters and dynamic settings, then create driver services and the clock
+     * timer.
+     */
     Simulator();
 
 private:
+    /** @brief Load and validate isSim, simTimeScale, joint physics, initial posture, rates and frames. */
     void LoadConfiguration();
-    void Initialization();
-    void DynamicControlCB(const fer_msgs::msg::DynamicControlData& message);
-    void DriverCommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+    /** @brief Create simulated driver interfaces and the wall timer that advances the simulation clock. */
+    void InitializeROSInterfaces();
+    /** @brief Validate a dynamic reference and record its arrival on the simulator-owned clock. */
+    void HandleDynamicControl(const fer_msgs::msg::DynamicControlData& message);
+    /** @brief Accept enable/disable/recovery according to the simulated driver state. */
+    void HandleDriverCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
         fer_msgs::srv::DriverCommand::Response::SharedPtr response);
-    void GripperCommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+    /** @brief Validate and store a gripper target in metres and a speed in m/s. */
+    void HandleGripperCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
         fer_msgs::srv::DriverCommand::Response::SharedPtr response);
+    /**
+     * @brief Advance one fixed simulation step, update the arm/gripper and publish clock and due state
+     * messages.
+     */
     void Run();
-    void RunDynamicControl(double sampleTime);
+    /** @brief Process enable, watchdog and stop transitions at the supplied simulation time in seconds. */
+    void UpdateControlState(double currentTime);
+    /** @brief Integrate active arm control using substeps no longer than one simulated millisecond. */
+    void AdvanceArm(double sampleTime);
+    /**
+     * @brief Integrate one bounded torque-control physics substep.
+     * @param sampleTime Simulated step duration in seconds; nonpositive steps do nothing.
+     */
+    void IntegrateArmStep(double sampleTime);
+    /**
+     * @brief Update RML kinematics and publish arm, joint and gripper feedback at the current simulation
+     * time.
+     */
     void PublishState();
+    /** @brief Latch a simulated driver error and clear the control request until explicit recovery. */
     void SetError(const std::string& message);
 
     FrankaArmModel model_;
-    DCLConfiguration conf_;
+    DCLConfiguration configuration_;
     std::unique_ptr<DynamicController> dynamicController_;
     std::unique_ptr<JointReferenceGenerator> stopReferenceGenerator_;
     JointReference jointReference_;

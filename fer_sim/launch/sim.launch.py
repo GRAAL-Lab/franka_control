@@ -9,6 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
+    """Launch the numerical driver with the configured global simulation speed."""
     simulator_configuration = str(Path(get_package_share_directory('fer_sim')) / 'conf/simulator.yaml')
     dynamic_configuration = str(Path(get_package_share_directory('fer_ctrl')) / 'conf/dcl_fer.conf')
 

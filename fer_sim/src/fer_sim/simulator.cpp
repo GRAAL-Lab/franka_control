@@ -11,17 +11,23 @@ using std::placeholders::_1;
 using std::placeholders::_2;
 
 namespace fer {
+namespace {
+
+// Keep integration resolution fixed when the wall-clock simulation speed changes.
+constexpr double MAX_PHYSICS_STEP = 0.001;
+
+}
 
 Simulator::Simulator()
     : Node("simulator_node")
     , model_("Panda", declare_parameter("tool_offset", DEFAULT_TOOL_OFFSET))
 {
     LoadConfiguration();
-    dynamicController_ = std::make_unique<DynamicController>(conf_);
-    stopReferenceGenerator_ = std::make_unique<JointReferenceGenerator>(conf_);
+    dynamicController_ = std::make_unique<DynamicController>(configuration_);
+    stopReferenceGenerator_ = std::make_unique<JointReferenceGenerator>(configuration_);
     stopReferenceGenerator_->Reset(jointPosition_);
     jointReference_.position = jointPosition_;
-    Initialization();
+    InitializeROSInterfaces();
 }
 
 void Simulator::LoadConfiguration()
@@ -35,13 +41,13 @@ void Simulator::LoadConfiguration()
         throw std::invalid_argument("simTimeScale must be finite and positive");
     }
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/dcl_fer.conf";
-    conf_.LoadConfiguration(declare_parameter("dynamic_configuration_file", defaultFile));
+    configuration_.LoadConfiguration(declare_parameter("dynamic_configuration_file", defaultFile));
     loopRate_ = declare_parameter("loop_rate", 1000.0);
     publishRate_ = declare_parameter("publish_rate", 100.0);
     commandTimeout_ = declare_parameter("command_timeout", 0.2);
     baseFrame_ = declare_parameter("base_frame", "panda_link0");
 
-    auto ReadJointParameter = [this](const std::string& name, const JointVector& initial) {
+    auto readJointParameter = [this](const std::string& name, const JointVector& initial) {
         auto values
             = declare_parameter(name, std::vector<double>(initial.data(), initial.data() + ARM_JOINTS));
         if (values.size() != ARM_JOINTS) {
@@ -49,11 +55,11 @@ void Simulator::LoadConfiguration()
         }
         return JointVector(Eigen::Map<const JointVector>(values.data()));
     };
-    jointPosition_ = ReadJointParameter("initial_joints", HomeJointPosition());
+    jointPosition_ = readJointParameter("initial_joints", HomeJointPosition());
     JointVector defaultInertia;
     defaultInertia << 3.0, 3.0, 2.0, 2.0, 0.3, 0.3, 0.2;
-    jointInertia_ = ReadJointParameter("joint_inertia", defaultInertia);
-    jointDamping_ = ReadJointParameter("joint_damping", JointVector::Constant(0.1));
+    jointInertia_ = readJointParameter("joint_inertia", defaultInertia);
+    jointDamping_ = readJointParameter("joint_damping", JointVector::Constant(0.1));
     massMatrix_ = jointInertia_.asDiagonal();
 
     if (!JointsWithinLimits(jointPosition_) || !jointInertia_.allFinite() || !jointDamping_.allFinite()
@@ -65,19 +71,19 @@ void Simulator::LoadConfiguration()
     }
 }
 
-void Simulator::Initialization()
+void Simulator::InitializeROSInterfaces()
 {
     dynamicControlSub_ = create_subscription<fer_msgs::msg::DynamicControlData>(topicnames::dynamic_control,
-        rclcpp::QoS(1).reliable(), std::bind(&Simulator::DynamicControlCB, this, _1));
+        rclcpp::QoS(1).reliable(), std::bind(&Simulator::HandleDynamicControl, this, _1));
     stateDataPub_ = create_publisher<fer_msgs::msg::StateData>(
         topicnames::state_data, rclcpp::SensorDataQoS().keep_last(1));
     jointStatePub_ = create_publisher<sensor_msgs::msg::JointState>(
         topicnames::joint_states, rclcpp::SensorDataQoS().keep_last(1));
     gripperStatePub_ = create_publisher<fer_msgs::msg::GripperState>(topicnames::gripper_state, 1);
     driverCommandService_ = create_service<fer_msgs::srv::DriverCommand>(
-        topicnames::driver_command, std::bind(&Simulator::DriverCommandsHandler, this, _1, _2));
+        topicnames::driver_command, std::bind(&Simulator::HandleDriverCommand, this, _1, _2));
     gripperCommandService_ = create_service<fer_msgs::srv::DriverCommand>(
-        topicnames::gripper_command, std::bind(&Simulator::GripperCommandsHandler, this, _1, _2));
+        topicnames::gripper_command, std::bind(&Simulator::HandleGripperCommand, this, _1, _2));
     clockPub_ = create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::ClockQoS());
     const double wallPeriod = 1.0 / (loopRate_ * simTimeScale_);
     if (!std::isfinite(wallPeriod) || wallPeriod < 1e-9) {
@@ -87,7 +93,7 @@ void Simulator::Initialization()
         std::chrono::duration<double>(wallPeriod), std::bind(&Simulator::Run, this));
 }
 
-void Simulator::DynamicControlCB(const fer_msgs::msg::DynamicControlData& message)
+void Simulator::HandleDynamicControl(const fer_msgs::msg::DynamicControlData& message)
 {
     lastCommandTime_ = simulationTime_.seconds();
     commandEnabled_ = message.control_enabled;
@@ -97,8 +103,8 @@ void Simulator::DynamicControlCB(const fer_msgs::msg::DynamicControlData& messag
     reference.acceleration = Eigen::Map<const JointVector>(message.joint_accelerations.data());
     if (!JointsWithinLimits(reference.position) || !reference.velocity.allFinite()
         || !reference.acceleration.allFinite() || message.header.frame_id != baseFrame_
-        || reference.velocity.cwiseAbs().maxCoeff() > conf_.maxJointVelocity + 1e-9
-        || reference.acceleration.cwiseAbs().maxCoeff() > conf_.maxJointAcceleration + 1e-9) {
+        || reference.velocity.cwiseAbs().maxCoeff() > configuration_.maxJointVelocity + 1e-9
+        || reference.acceleration.cwiseAbs().maxCoeff() > configuration_.maxJointAcceleration + 1e-9) {
         commandEnabled_ = false;
         SetError("Invalid dynamic joint reference");
         return;
@@ -108,7 +114,7 @@ void Simulator::DynamicControlCB(const fer_msgs::msg::DynamicControlData& messag
     }
 }
 
-void Simulator::DriverCommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+void Simulator::HandleDriverCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
     fer_msgs::srv::DriverCommand::Response::SharedPtr response)
 {
     response->success = true;
@@ -129,7 +135,7 @@ void Simulator::DriverCommandsHandler(fer_msgs::srv::DriverCommand::Request::Sha
     response->message = "Simulator operation accepted";
 }
 
-void Simulator::GripperCommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+void Simulator::HandleGripperCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
     fer_msgs::srv::DriverCommand::Response::SharedPtr response)
 {
     response->success = true;
@@ -165,7 +171,25 @@ void Simulator::Run()
     simulationTime_ += step;
     const double currentTime = simulationTime_.seconds();
     const double sampleTime = step.seconds();
-    bool commandFresh = currentTime - lastCommandTime_ <= commandTimeout_;
+    UpdateControlState(currentTime);
+    AdvanceArm(sampleTime);
+
+    const double widthError = gripperTarget_ - gripperWidth_;
+    const double maximumWidthChange = gripperSpeed_ * sampleTime;
+    gripperWidth_ += std::clamp(widthError, -maximumWidthChange, maximumWidthChange);
+
+    rosgraph_msgs::msg::Clock clock;
+    clock.clock = simulationTime_;
+    clockPub_->publish(clock);
+    if (currentTime - lastPublishTime_ >= 1.0 / publishRate_ - 1e-9) {
+        PublishState();
+        lastPublishTime_ = currentTime;
+    }
+}
+
+void Simulator::UpdateControlState(double currentTime)
+{
+    const bool commandFresh = currentTime - lastCommandTime_ <= commandTimeout_;
     if (controlRequested_ && !controlActive_ && commandEnabled_ && commandFresh && !hasError_) {
         controlActive_ = true;
     }
@@ -178,26 +202,17 @@ void Simulator::Run()
         stopStartTime_ = currentTime;
         stopReferenceGenerator_->SetReference(jointReference_);
     }
-    if (controlActive_) {
-        const int substeps = static_cast<int>(std::ceil(sampleTime / 0.001));
-        for (int index = 0; index < substeps && controlActive_; ++index) {
-            RunDynamicControl(sampleTime / substeps);
-        }
-    }
+}
 
-    double widthError = gripperTarget_ - gripperWidth_;
-    gripperWidth_ += std::clamp(widthError, -gripperSpeed_ * sampleTime, gripperSpeed_ * sampleTime);
-
-    rosgraph_msgs::msg::Clock clock;
-    clock.clock = simulationTime_;
-    clockPub_->publish(clock);
-    if (currentTime - lastPublishTime_ >= 1.0 / publishRate_ - 1e-9) {
-        PublishState();
-        lastPublishTime_ = currentTime;
+void Simulator::AdvanceArm(double sampleTime)
+{
+    const int substeps = static_cast<int>(std::ceil(sampleTime / MAX_PHYSICS_STEP));
+    for (int index = 0; index < substeps && controlActive_; ++index) {
+        IntegrateArmStep(sampleTime / substeps);
     }
 }
 
-void Simulator::RunDynamicControl(double sampleTime)
+void Simulator::IntegrateArmStep(double sampleTime)
 {
     if (sampleTime <= 0.0) {
         return;
@@ -261,9 +276,9 @@ void Simulator::PublishState()
     message.joint_state.velocity.assign(jointVelocity_.data(), jointVelocity_.data() + ARM_JOINTS);
     message.joint_state.effort.assign(commandedTorque_.data(), commandedTorque_.data() + ARM_JOINTS);
     message.tool_pose = PoseToMessage(toolFrame);
-    std::copy_n(toolJacobian.data(), 42, message.zero_jacobian.begin());
-    std::copy_n(flangeToTool.data(), 16, message.flange_to_tool.begin());
-    std::copy_n(massMatrix_.data(), 49, message.mass_matrix.begin());
+    std::copy_n(toolJacobian.data(), toolJacobian.size(), message.zero_jacobian.begin());
+    std::copy_n(flangeToTool.data(), flangeToTool.size(), message.flange_to_tool.begin());
+    std::copy_n(massMatrix_.data(), massMatrix_.size(), message.mass_matrix.begin());
     std::copy_n(commandedTorque_.data(), ARM_JOINTS, message.commanded_torques.begin());
     stateDataPub_->publish(message);
     jointStatePub_->publish(message.joint_state);

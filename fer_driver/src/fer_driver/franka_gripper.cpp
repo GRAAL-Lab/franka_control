@@ -15,12 +15,12 @@ FrankaGripper::FrankaGripper()
     callbackGroup_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     gripperStatePub_ = create_publisher<fer_msgs::msg::GripperState>(topicnames::gripper_state, 1);
     commandService_ = create_service<fer_msgs::srv::DriverCommand>(topicnames::gripper_command,
-        std::bind(&FrankaGripper::CommandsHandler, this, _1, _2), rclcpp::ServicesQoS(), callbackGroup_);
+        std::bind(&FrankaGripper::HandleGripperCommand, this, _1, _2), rclcpp::ServicesQoS(), callbackGroup_);
     stateTimer_ = create_wall_timer(
         std::chrono::milliseconds(100), std::bind(&FrankaGripper::PublishState, this), callbackGroup_);
 }
 
-void FrankaGripper::CommandsHandler(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
+void FrankaGripper::HandleGripperCommand(fer_msgs::srv::DriverCommand::Request::SharedPtr request,
     fer_msgs::srv::DriverCommand::Response::SharedPtr response)
 {
     if (request->command_type == "stop") {

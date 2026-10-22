@@ -24,15 +24,15 @@ KinematicController::KinematicController()
     bool isSim = declare_parameter("isSim", false);
     set_parameter(rclcpp::Parameter("use_sim_time", isSim));
     controller_ = std::make_unique<TaskPriorityController>(configurationFile, isSim);
-    Initialization();
+    InitializeROSInterfaces();
     RCLCPP_INFO(
         get_logger(), "[KCL] Loaded tasks, priority levels and actions from %s", configurationFile.c_str());
 }
 
-void KinematicController::Initialization()
+void KinematicController::InitializeROSInterfaces()
 {
     stateDataSub_ = create_subscription<fer_msgs::msg::StateData>(topicnames::state_data,
-        rclcpp::SensorDataQoS().keep_last(1), std::bind(&KinematicController::StateDataCB, this, _1));
+        rclcpp::SensorDataQoS().keep_last(1), std::bind(&KinematicController::HandleStateData, this, _1));
     controlDataPub_
         = create_publisher<fer_msgs::msg::ControlData>(topicnames::ctrl_data, rclcpp::QoS(1).reliable());
     taskStatusPub_ = create_publisher<fer_msgs::msg::TaskStatus>(topicnames::task_status, 1);
@@ -43,7 +43,7 @@ void KinematicController::Initialization()
     driverClient_ = create_client<fer_msgs::srv::DriverCommand>(topicnames::driver_command);
     gripperClient_ = create_client<fer_msgs::srv::DriverCommand>(topicnames::gripper_command);
     commandService_ = create_service<fer_msgs::srv::ControlCommand>(
-        topicnames::control_command, std::bind(&KinematicController::CommandsHandler, this, _1, _2));
+        topicnames::control_command, std::bind(&KinematicController::HandleControlCommand, this, _1, _2));
     tfPublisher_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     double sampleTime = 1.0 / controller_->GetConfiguration().loopRate;
     runTimer_ = rclcpp::create_timer(this, get_clock(),
@@ -52,7 +52,7 @@ void KinematicController::Initialization()
         rclcpp::Duration::from_seconds(0.2), std::bind(&KinematicController::PublishAction, this));
 }
 
-void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
+void KinematicController::HandleStateData(const fer_msgs::msg::StateData& message)
 {
     try {
         if (message.joint_state.position.size() != ARM_JOINTS
@@ -82,7 +82,7 @@ void KinematicController::StateDataCB(const fer_msgs::msg::StateData& message)
     }
 }
 
-void KinematicController::CommandsHandler(fer_msgs::srv::ControlCommand::Request::SharedPtr request,
+void KinematicController::HandleControlCommand(fer_msgs::srv::ControlCommand::Request::SharedPtr request,
     fer_msgs::srv::ControlCommand::Response::SharedPtr response)
 {
     if (request->command_type.compare(0, 8, "gripper_") == 0) {

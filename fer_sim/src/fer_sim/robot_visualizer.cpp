@@ -16,7 +16,7 @@ RobotVisualizer::RobotVisualizer()
     : Node("visualizer_node")
 {
     LoadConfiguration();
-    Initialization();
+    InitializeROSInterfaces();
 }
 
 void RobotVisualizer::LoadConfiguration()
@@ -31,8 +31,13 @@ void RobotVisualizer::LoadConfiguration()
         throw std::invalid_argument("Visualizer loop_rate must be in 1..1000 Hz");
     }
     std::string defaultFile = ament_index_cpp::get_package_share_directory("fer_ctrl") + "/conf/kcl_fer.conf";
+    LoadObstacleMarkers(declare_parameter("configuration_file", defaultFile));
+}
+
+void RobotVisualizer::LoadObstacleMarkers(const std::string& configurationFile)
+{
     libconfig::Config configuration;
-    configuration.readFile(declare_parameter("configuration_file", defaultFile).c_str());
+    configuration.readFile(configurationFile.c_str());
     const auto& obstacles = configuration.getRoot()["obstacles"];
     for (int index = 0; index < obstacles.getLength(); ++index) {
         const auto& obstacle = obstacles[index];
@@ -66,23 +71,24 @@ void RobotVisualizer::LoadConfiguration()
     }
 }
 
-void RobotVisualizer::Initialization()
+void RobotVisualizer::InitializeROSInterfaces()
 {
     markerPub_ = create_publisher<visualization_msgs::msg::Marker>("visualization/arm", 1);
     visualizationPub_
         = create_publisher<visualization_msgs::msg::MarkerArray>("visualization/joint_markers", 1);
     stateDataSub_ = create_subscription<fer_msgs::msg::StateData>(topicnames::state_data,
-        rclcpp::SensorDataQoS().keep_last(1), std::bind(&RobotVisualizer::StateDataCB, this, _1));
+        rclcpp::SensorDataQoS().keep_last(1), std::bind(&RobotVisualizer::HandleStateData, this, _1));
     controlDataSub_ = create_subscription<fer_msgs::msg::ControlData>(topicnames::ctrl_data,
-        rclcpp::QoS(1).reliable(), std::bind(&RobotVisualizer::ControlDataCB, this, _1));
+        rclcpp::QoS(1).reliable(), std::bind(&RobotVisualizer::HandleControlData, this, _1));
     controlCommandClient_ = create_client<fer_msgs::srv::ControlCommand>(topicnames::control_command);
-    intMarkerServer_ = std::make_unique<interactive_markers::InteractiveMarkerServer>("tool_control", this);
+    interactiveMarkerServer_
+        = std::make_unique<interactive_markers::InteractiveMarkerServer>("tool_control", this);
     tfPublisher_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     runTimer_ = rclcpp::create_timer(this, get_clock(),
         rclcpp::Duration::from_seconds(1.0 / loopRate_), std::bind(&RobotVisualizer::Run, this));
 }
 
-void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
+void RobotVisualizer::HandleStateData(const fer_msgs::msg::StateData& message)
 {
     if (!message.connected || message.header.frame_id != baseFrame_
         || message.joint_state.name != JointNames() || message.joint_state.position.size() != ARM_JOINTS) {
@@ -101,8 +107,8 @@ void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
             throw std::invalid_argument("Invalid measured tool pose");
         }
         model_.JointsPosition(jointPosition);
-        if (intMarkerServer_->empty()) {
-            make6DofMarker(message.tool_pose);
+        if (interactiveMarkerServer_->empty()) {
+            CreateToolControlMarker(message.tool_pose);
         }
         lastFeedbackTime_ = now().seconds();
         receivingFeedback_ = true;
@@ -112,12 +118,28 @@ void RobotVisualizer::StateDataCB(const fer_msgs::msg::StateData& message)
     }
 }
 
-void RobotVisualizer::ControlDataCB(const fer_msgs::msg::ControlData& message)
+void RobotVisualizer::HandleControlData(const fer_msgs::msg::ControlData& message)
 {
-    controlDataMsg_ = message;
+    controlData_ = message;
 }
 
 void RobotVisualizer::Run()
+{
+    const bool feedbackFresh = receivingFeedback_ && now().seconds() - lastFeedbackTime_ <= 0.2;
+    ProcessToolCommand(feedbackFresh);
+    if (!feedbackFresh) {
+        return;
+    }
+    PublishMarkers();
+    if (!dragging_ && !commandQueued_ && !pendingCommand_) {
+        const auto pose = controlData_.ctrl_state == "move_cartesian" ? controlData_.target_pose
+                                                                      : PoseToMessage(toolFrame_);
+        interactiveMarkerServer_->setPose("tool_control", pose);
+    }
+    interactiveMarkerServer_->applyChanges();
+}
+
+void RobotVisualizer::ProcessToolCommand(bool feedbackFresh)
 {
     if (pendingCommand_) {
         if (pendingCommand_->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -132,31 +154,20 @@ void RobotVisualizer::Run()
             RCLCPP_WARN(get_logger(), "[Visualizer] Controller service timed out");
         }
     }
-    bool feedbackFresh = receivingFeedback_ && now().seconds() - lastFeedbackTime_ <= 0.2;
-    if (sendCommandToController_ && !pendingCommand_) {
+    if (commandQueued_ && !pendingCommand_) {
         if (!feedbackFresh) {
-            sendCommandToController_ = false;
+            commandQueued_ = false;
             RCLCPP_WARN(get_logger(), "[Visualizer] Fresh feedback is required for tool control");
         } else if (controlCommandClient_->service_is_ready()) {
-            sendCommandToController_ = false;
+            commandQueued_ = false;
             auto request = std::make_shared<fer_msgs::srv::ControlCommand::Request>(commandRequest_);
             pendingCommand_.emplace(controlCommandClient_->async_send_request(request));
             commandSendTime_ = now().seconds();
         } else if (now().seconds() - commandSendTime_ > 5.0) {
-            sendCommandToController_ = false;
+            commandQueued_ = false;
             RCLCPP_WARN(get_logger(), "[Visualizer] Controller service is unavailable");
         }
     }
-    if (!feedbackFresh) {
-        return;
-    }
-    PublishMarkers();
-    if (!dragging_ && !sendCommandToController_ && !pendingCommand_) {
-        auto pose = controlDataMsg_.ctrl_state == "move_cartesian" ? controlDataMsg_.target_pose
-                                                                   : PoseToMessage(toolFrame_);
-        intMarkerServer_->setPose("tool_control", pose);
-    }
-    intMarkerServer_->applyChanges();
 }
 
 void RobotVisualizer::PublishMarkers()
@@ -240,7 +251,7 @@ void RobotVisualizer::PublishToTF(const Eigen::TransformationMatrix& frame, cons
     tfPublisher_->sendTransform(transform);
 }
 
-void RobotVisualizer::make6DofMarker(const geometry_msgs::msg::Pose& pose)
+void RobotVisualizer::CreateToolControlMarker(const geometry_msgs::msg::Pose& pose)
 {
     visualization_msgs::msg::InteractiveMarker marker;
     marker.header.frame_id = baseFrame_;
@@ -278,11 +289,12 @@ void RobotVisualizer::make6DofMarker(const geometry_msgs::msg::Pose& pose)
         control.interaction_mode = control.MOVE_AXIS;
         marker.controls.push_back(control);
     }
-    intMarkerServer_->insert(marker, std::bind(&RobotVisualizer::interactiveMarkerCB, this, _1));
-    intMarkerServer_->applyChanges();
+    interactiveMarkerServer_->insert(
+        marker, std::bind(&RobotVisualizer::HandleToolControlFeedback, this, _1));
+    interactiveMarkerServer_->applyChanges();
 }
 
-void RobotVisualizer::interactiveMarkerCB(
+void RobotVisualizer::HandleToolControlFeedback(
     const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
 {
     using Feedback = visualization_msgs::msg::InteractiveMarkerFeedback;
@@ -313,8 +325,8 @@ void RobotVisualizer::interactiveMarkerCB(
         commandRequest_.target_orientation = { rpy.Roll(), rpy.Pitch(), rpy.Yaw() };
         PublishToTF(controlFramePose_, controlFrame_);
         dragging_ = feedback->event_type == Feedback::POSE_UPDATE;
-        sendCommandToController_ = feedback->event_type == Feedback::MOUSE_UP;
-        if (sendCommandToController_) {
+        commandQueued_ = feedback->event_type == Feedback::MOUSE_UP;
+        if (commandQueued_) {
             commandSendTime_ = now().seconds();
         }
     } catch (const std::exception& exception) {

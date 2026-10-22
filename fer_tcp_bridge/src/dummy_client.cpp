@@ -16,8 +16,8 @@ int main(int argc, char** argv)
         if (port < 1 || port > 65535 || maxReports < 0 || (!command.empty() && command != "stop")) {
             throw std::invalid_argument("Use a valid port, max_reports >= 0, and an empty command or stop");
         }
-        boost::asio::io_context ioService;
-        boost::asio::ip::tcp::socket socket(ioService);
+        boost::asio::io_context ioContext;
+        boost::asio::ip::tcp::socket socket(ioContext);
         socket.connect({ boost::asio::ip::make_address(host), static_cast<uint16_t>(port) });
         if (command == "stop") {
             ArmProtocol::ArmProtocolHeader header { 0, ArmProtocol::EMERGENCY_STOP, 0 };

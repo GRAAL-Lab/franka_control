@@ -1,0 +1,20 @@
+# Run `doxygen Doxyfile` from the repository root. No build or hardware is required.
+PROJECT_NAME           = "FER control stack"
+OUTPUT_DIRECTORY       = docs/api
+INPUT                  = fer_ctrl/include fer_driver/include fer_model/include \
+                         fer_msgs/include fer_sim/include fer_tcp_bridge/include
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.h
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+HIDE_UNDOC_MEMBERS      = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_AS_ERROR          = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+HAVE_DOT               = NO
+QUIET                  = YES
+JAVADOC_AUTOBRIEF      = YES
+STRIP_FROM_PATH        = .
