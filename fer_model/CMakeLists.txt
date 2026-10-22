@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(fer_model)
 option(BUILD_TESTING "Build tests" OFF)
+# Accept the workspace-wide option; hardware targets are defined in fer_driver.
+option(FER_BUILD_HARDWARE "Build the libfranka hardware executables" ON)
 find_package(ament_cmake REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)

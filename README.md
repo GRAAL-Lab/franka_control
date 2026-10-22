@@ -89,8 +89,7 @@ Run from this repository root:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install \
-  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 source install/setup.bash
 ```
 
@@ -100,8 +99,7 @@ For a custom libfranka installation, append
 To build for simulation without libfranka:
 
 ```bash
-colcon build --symlink-install \
-  --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DFER_BUILD_HARDWARE=OFF
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo -DFER_BUILD_HARDWARE=OFF
 source install/setup.bash
 ```
 
