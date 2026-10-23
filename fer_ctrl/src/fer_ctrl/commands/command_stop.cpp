@@ -8,7 +8,7 @@ fsm::retval Stop::Execute()
     robotInfo->velocityGoal.setZero();
     const std::string currentState = fsm_->GetCurrentStateName();
     if (currentState == ID::states::disabled || currentState == ID::states::fault
-        || currentState == ID::states::parked) {
+        || currentState == ID::states::parked || currentState == ID::states::disabling) {
         return fsm::ok;
     }
     robotInfo->status = "Stop accepted";

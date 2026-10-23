@@ -36,6 +36,7 @@ add_library(fer_kinematic_ctrl_lib
     src/fer_ctrl/tasks/obstacle_avoidance.cpp
     src/fer_ctrl/states/generic_state.cpp
     src/fer_ctrl/states/state_disabled.cpp
+    src/fer_ctrl/states/state_disabling.cpp
     src/fer_ctrl/states/state_enabling.cpp
     src/fer_ctrl/states/state_fault.cpp
     src/fer_ctrl/states/state_idle.cpp

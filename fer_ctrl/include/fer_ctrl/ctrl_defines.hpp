@@ -16,6 +16,7 @@ namespace fer {
 namespace ID {
 namespace states {
 inline const std::string disabled = "disabled";
+inline const std::string disabling = "disabling";
 inline const std::string enabling = "enabling";
 inline const std::string idle = "idle";
 inline const std::string parked = "parked";
@@ -89,6 +90,7 @@ struct KCLConfiguration {
     double velocityCommandTimeout = 0.3;
     double moveTimeout = 30.0;
     double enableTimeout = 5.0;
+    double disableTimeout = 5.0;
     double jointLimitMargin = 0.05;
     double actionTransitionDuration = 0.15;
     JointVector saturationMin = JointVector::Constant(-0.35);

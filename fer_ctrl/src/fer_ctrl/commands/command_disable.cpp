@@ -6,9 +6,15 @@ namespace commands {
 fsm::retval Disable::Execute()
 {
     robotInfo->velocityGoal.setZero();
-    robotInfo->status
-        = request_.commandType == "recover" ? "Recovery requested; enable after completion" : "Disabled";
-    return fsm_->SetNextState(ID::states::disabled);
+    if (request_.commandType == "recover") {
+        robotInfo->status = "Recovery requested; enable after completion";
+        return fsm_->SetNextState(ID::states::disabled);
+    }
+    if (fsm_->GetCurrentStateName() == ID::states::disabling) {
+        return fsm::ok;
+    }
+    robotInfo->status = "Waiting for driver control loop to stop";
+    return fsm_->SetNextState(ID::states::disabling);
 }
 
 }

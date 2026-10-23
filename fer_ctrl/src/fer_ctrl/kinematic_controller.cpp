@@ -172,13 +172,16 @@ void KinematicController::CheckDriverResponses()
 {
     for (auto pending = pendingRequests_.begin(); pending != pendingRequests_.end();) {
         bool completed = false;
+        const std::string state = controller_->GetState();
+        const bool waitingForDriver = pending->client == driverClient_
+            && ((pending->command == "enable" && state == ID::states::enabling)
+                || (pending->command == "disable" && state == ID::states::disabling));
         if (pending->future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             auto response = pending->future.get();
             if (!response->success) {
                 RCLCPP_ERROR(
                     get_logger(), "[KCL] Driver %s: %s", pending->command.c_str(), response->message.c_str());
-                if (pending->client == driverClient_ && pending->command == "enable"
-                    && controller_->GetState() == ID::states::enabling) {
+                if (waitingForDriver) {
                     controller_->SetFault(response->message);
                 }
             }
@@ -186,7 +189,7 @@ void KinematicController::CheckDriverResponses()
         } else if (now().seconds() - pending->requestTime > 30.0) {
             pending->client->remove_pending_request(pending->future);
             RCLCPP_ERROR(get_logger(), "[KCL] Driver %s timed out", pending->command.c_str());
-            if (pending->client == driverClient_ && controller_->GetState() == ID::states::enabling) {
+            if (waitingForDriver) {
                 controller_->SetFault("Driver service timed out");
             }
             completed = true;

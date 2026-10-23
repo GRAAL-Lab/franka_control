@@ -8,7 +8,7 @@
 namespace fer {
 namespace commands {
 
-/** @brief Request the disabled state for disable or recovery and clear velocity goals. */
+/** @brief Clear velocity goals; disable waits for driver stop, while recovery returns to disabled. */
 class Disable : public GenericCommand {
 public:
     /**

@@ -145,7 +145,8 @@ void FrankaTCPBridge::QueueControlStatusReport()
     ArmReportMessage report {};
     report.header = { 0, ARM_STATUS, sizeof(ArmStatus) - HEADER_SIZE };
     static const std::map<std::string, ArmStatusEnum> states = { { "disabled", DISABLED },
-        { "enabling", ENABLING }, { "idle", IDLE }, { "unparking", UNPARKING }, { "parking", PARKING },
+        { "disabling", DISABLING }, { "enabling", ENABLING }, { "idle", IDLE },
+        { "unparking", UNPARKING }, { "parking", PARKING },
         { "parked", PARKED }, { "move_joints_pos", MOVING_JOINTS }, { "move_joints_vel", MOVING_JOINTS },
         { "move_cartesian", MOVING_EE }, { "fault", FAULT } };
     auto state = states.find(controlData_.ctrl_state);

@@ -52,7 +52,7 @@ public:
 
     /** @brief Return the current FSM state identifier. */
     std::string GetState() const;
-    /** @brief Return true in every state except disabled and fault, including enabling. */
+    /** @brief Return true when control is requested, including enabling; false while disabling. */
     bool IsEnabled() const;
     /**
      * @brief Check connected feedback against the configured timeout.

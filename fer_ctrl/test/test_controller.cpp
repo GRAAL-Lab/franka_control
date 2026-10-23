@@ -145,9 +145,98 @@ TEST_F(ControllerTest, RequiresExplicitEnableAndDriverAcknowledgement)
     Enable();
     EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
     EXPECT_TRUE(SendCommand("disable").success);
-    EXPECT_EQ(controller_->GetState(), "idle");
+    EXPECT_EQ(controller_->GetState(), "disabling");
     EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
     EXPECT_FALSE(controller_->IsEnabled());
+}
+
+TEST_F(ControllerTest, DisableWaitsForDriverStopAndRejectsNewMotion)
+{
+    Enable();
+    ASSERT_TRUE(SendCommand("disable").success);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+    EXPECT_FALSE(controller_->IsEnabled());
+    EXPECT_FALSE(SendCommand("enable").success);
+    EXPECT_FALSE(SendCommand("park").success);
+    EXPECT_FALSE(SendCommand("recover").success);
+    ASSERT_TRUE(SendCommand("stop").success);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    currentTime_ += 0.01;
+    controller_->SetFeedback(feedback_, currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    feedback_.connected = false;
+    feedback_.controlActive = false;
+    controller_->SetFeedback(feedback_, currentTime_);
+    controller_->Run(currentTime_);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    feedback_.connected = true;
+    controller_->SetFeedback(feedback_, currentTime_);
+    controller_->Run(currentTime_);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    EXPECT_EQ(controller_->GetState(), "disabled");
+    EXPECT_EQ(controller_->GetRobotInfo().status, "Disabled");
+    EXPECT_FALSE(controller_->IsEnabled());
+}
+
+TEST_F(ControllerTest, DisableRequiresFeedbackReceivedSinceTheRequest)
+{
+    // The last inactive feedback predates the disable request, even though it is recent.
+    currentTime_ += 0.01;
+    ASSERT_TRUE(SendCommand("disable").success);
+    controller_->Run(currentTime_);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    controller_->SetFeedback(feedback_, currentTime_);
+    controller_->Run(currentTime_);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabled");
+}
+
+TEST_F(ControllerTest, DisableTimesOutWithoutFreshStopConfirmation)
+{
+    configuration_.lookup("disableTimeout") = 0.05;
+    controller_ = MakeController();
+    controller_->SetFeedback(feedback_, currentTime_);
+    currentTime_ += 0.3;
+    ASSERT_TRUE(SendCommand("disable").success);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    currentTime_ += 0.06;
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "fault");
+    EXPECT_EQ(controller_->GetRobotInfo().status, "Driver disable timed out");
+    EXPECT_FALSE(controller_->IsEnabled());
+}
+
+TEST_F(ControllerTest, RepeatedDisableDoesNotRestartTheDeadline)
+{
+    Enable();
+    ASSERT_TRUE(SendCommand("disable").success);
+    const double entryTime = controller_->GetRobotInfo().stateEntryTime;
+    const double timeout = controller_->GetConfiguration().disableTimeout;
+
+    currentTime_ += timeout * 0.75;
+    controller_->SetFeedback(feedback_, currentTime_);
+    ASSERT_TRUE(SendCommand("disable").success);
+    EXPECT_EQ(controller_->GetRobotInfo().stateEntryTime, entryTime);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+
+    currentTime_ += timeout * 0.5;
+    controller_->SetFeedback(feedback_, currentTime_);
+    ASSERT_TRUE(SendCommand("disable").success);
+    EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "fault");
 }
 
 TEST_F(ControllerTest, RejectsMalformedGoalsWithoutChangingState)
@@ -259,10 +348,17 @@ TEST_F(ControllerTest, StaleFeedbackStopsAndDoesNotRestart)
     EXPECT_GT(controller_->Run(currentTime_).jointVelocity.norm(), 0.0);
     currentTime_ += 0.3;
     EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
-    EXPECT_EQ(controller_->GetState(), "disabled");
+    EXPECT_EQ(controller_->GetState(), "disabling");
     controller_->SetFeedback(feedback_, currentTime_);
     EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
     EXPECT_TRUE(SendCommand("stop").success);
+    EXPECT_EQ(controller_->GetState(), "disabling");
+    feedback_.controlActive = false;
+    controller_->SetFeedback(feedback_, currentTime_);
+    controller_->Run(currentTime_);
+    controller_->Run(currentTime_);
+    EXPECT_EQ(controller_->GetState(), "disabled");
+    EXPECT_FALSE(controller_->IsEnabled());
 }
 
 TEST_F(ControllerTest, VelocityCommandsExpire)
@@ -561,13 +657,14 @@ TEST_F(ControllerTest, StopAndDisableCancelCommandsBeforeTheTimerAppliesThem)
         ASSERT_TRUE(SendCommand("enable").success);
         ASSERT_TRUE(SendCommand(command).success);
         EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
+        controller_->Run(currentTime_);
         EXPECT_EQ(controller_->GetState(), "disabled");
 
         Enable();
         ASSERT_TRUE(SendCommand("park").success);
         ASSERT_TRUE(SendCommand(command).success);
         EXPECT_TRUE(controller_->Run(currentTime_).jointVelocity.isZero());
-        EXPECT_EQ(controller_->GetState(), command == "stop" ? "idle" : "disabled");
+        EXPECT_EQ(controller_->GetState(), command == "stop" ? "idle" : "disabling");
     }
 }
 

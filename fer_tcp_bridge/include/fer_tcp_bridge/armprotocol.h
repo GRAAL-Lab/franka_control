@@ -30,6 +30,7 @@ enum ArmStatusEnum : int32_t {
     PARKED,
     FAULT,
     ENABLING,
+    DISABLING,
     MAX_ARM_STATUS_ENUM
 };
 /** @brief Cartesian translation and RPY axis identifiers. */

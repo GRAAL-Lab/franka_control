@@ -174,6 +174,10 @@ ros2 launch fer_bringup fer.launch.py isSim:=false robot_ip:=172.16.0.2 with_gri
 Activate FCI and unlock the brakes in Franka Desk before enabling.
 `enable` starts torque control; `disable` decelerates the joint reference and
 ends the session. These commands do not operate power or brakes.
+After `disable`, the controller inhibits motion immediately and enters
+`disabling`. Fresh driver feedback confirming `control_active = false` completes
+the transition to `disabled`. If confirmation does not arrive within
+`disableTimeout` (default 5 seconds in `fer_ctrl/conf/kcl_fer.conf`), it enters `fault`.
 `recover` requests `automaticErrorRecovery()` after control has stopped.
 Connection failures require restarting the driver. Recovery and reconnection
 never resume an old motion.

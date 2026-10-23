@@ -37,6 +37,7 @@ public:
     void ConfigureStateFromFile(libconfig::Config& configuration);
     /**
      * @brief Record entry time and select the state action, blending for motion states.
+     * @details Log every state entry, including initial disabled, in tc::bluL followed by tc::none.
      * @return fsm::ok after action selection.
      * @throws std::runtime_error If the action manager rejects the action.
      */

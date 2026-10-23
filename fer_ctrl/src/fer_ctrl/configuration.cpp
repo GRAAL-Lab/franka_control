@@ -86,6 +86,7 @@ void KCLConfiguration::ConfigureFromFile(libconfig::Config& configuration)
     velocityCommandTimeout = ReadPositive(root, "velocityCommandTimeout");
     moveTimeout = ReadPositive(root, "moveTimeout");
     enableTimeout = ReadPositive(root, "enableTimeout");
+    disableTimeout = ReadPositive(root, "disableTimeout");
     jointLimitMargin = ReadPositive(root, "jointLimitMargin");
     actionTransitionDuration = root["actionTransitionDuration"];
     saturationMin = ReadJoints(root, "saturationMin");

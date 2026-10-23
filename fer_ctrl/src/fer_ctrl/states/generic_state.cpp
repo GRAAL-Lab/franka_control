@@ -1,5 +1,7 @@
 #include "fer_ctrl/states/generic_state.hpp"
 
+#include <ctrl_toolbox_internal/Futils.h>
+#include <iostream>
 #include <stdexcept>
 
 namespace fer {
@@ -29,6 +31,7 @@ fsm::retval GenericState::OnEntry()
     if (!actionManager->SetAction(actionName_, moving && configuration->actionTransitionDuration > 0.0)) {
         throw std::runtime_error("Cannot select task-priority action: " + actionName_);
     }
+    std::cout << tc::blu << "[KCL] Entering state: " << tc::bluL << stateName_ << tc::none << std::endl;
     return fsm::ok;
 }
 

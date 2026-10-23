@@ -104,6 +104,10 @@ stateDiagram-v2
   disabled --> enabling: enable with fresh ready feedback
   enabling --> idle: driver acknowledges torque control
   enabling --> fault: timeout or error
+  enabling --> disabling: disable
+  idle --> disabling: disable
+  disabling --> disabled: fresh feedback confirms control stopped
+  disabling --> fault: disableTimeout or driver request failure
   idle --> move_joints_pos: joint position
   idle --> move_joints_vel: joint velocity
   idle --> move_cartesian: Cartesian goal
@@ -119,8 +123,17 @@ stateDiagram-v2
 
 Disable and stop remain available when feedback is stale. Stop preserves the
 parked state and cancels a pending enable. Idle and parked request zero velocity.
+Disable enters `disabling` immediately from any state, clears velocity goals and
+sets `control_enabled` false. While disabling, motion, enable and recovery are
+rejected; stop and repeated disable requests preserve the stop deadline.
+Only fresh, connected feedback received since entry with `control_active` false
+confirms completion. Missing stop confirmation faults after `disableTimeout`
+(default 5 seconds); feedback loss also enters this stopping phase.
 A rejected motion request leaves the active goal unchanged. Restored feedback
 or recovery does not re-enable control.
+
+The TCP bridge reports `disabling` as `DISABLING` (code 10), appended after
+`ENABLING` to preserve existing status codes.
 
 Cartesian RPY uses `Rz(yaw) Ry(pitch) Rx(roll)`. Absolute poses use BASE.
 Relative BASE requests add translation in base coordinates and premultiply the

@@ -12,6 +12,7 @@
 #include "fer_ctrl/commands/command_move_joints_vel.hpp"
 #include "fer_ctrl/commands/command_move_cartesian.hpp"
 #include "fer_ctrl/states/state_disabled.hpp"
+#include "fer_ctrl/states/state_disabling.hpp"
 #include "fer_ctrl/states/state_enabling.hpp"
 #include "fer_ctrl/states/state_idle.hpp"
 #include "fer_ctrl/states/state_parked.hpp"
@@ -59,6 +60,7 @@ void TaskPriorityController::InitializeModelAndCommands()
     actionManager_ = std::make_shared<tpik::ActionManager>();
 
     statesMap_ = { { ID::states::disabled, std::make_shared<states::Disabled>() },
+        { ID::states::disabling, std::make_shared<states::Disabling>() },
         { ID::states::enabling, std::make_shared<states::Enabling>() },
         { ID::states::idle, std::make_shared<states::Idle>() },
         { ID::states::parked, std::make_shared<states::Parked>() },
@@ -145,6 +147,7 @@ void TaskPriorityController::ConfigureStatePermissions(bool isSim)
         }
     }
     controllerFsm_.EnableCommandInState(ID::states::disabled, "enable", true);
+    controllerFsm_.EnableCommandInState(ID::states::disabling, "recover", false);
     for (const auto& command : commandsMap_) {
         controllerFsm_.EnableCommandInState(ID::states::idle, command.first, true);
     }
@@ -226,6 +229,10 @@ CommandResult TaskPriorityController::ExecuteCommand(const CommandRequest& reque
     auto command = commandsMap_.at(commandName);
     command->SetRequest(request);
     fsm::retval result = controllerFsm_.ExecuteCommand(commandName);
+    if (result == fsm::ok && commandName == "disable") {
+        // Inhibit control and reject new motion as soon as disable is accepted.
+        controllerFsm_.SwitchState();
+    }
     return { result == fsm::ok, robotInfo_->status };
 }
 
@@ -261,9 +268,14 @@ ControlOutput TaskPriorityController::Run(double currentTime)
     actionManager_->Time(static_cast<long>(currentTime * 1000.0));
     controllerFsm_.SwitchState();
     controllerFsm_.ProcessEventQueue();
+    if (GetState() == ID::states::disabling) {
+        // Keep checking the stop deadline even when driver feedback is missing.
+        controllerFsm_.ExecuteState();
+        return output;
+    }
     if (!HasFreshFeedback(currentTime)) {
         if (IsEnabled()) {
-            ChangeState(ID::states::disabled, "Feedback timeout; enable again after reconnecting");
+            ChangeState(ID::states::disabling, "Feedback timeout; waiting for driver control to stop");
         }
         return output;
     }
@@ -322,7 +334,8 @@ std::string TaskPriorityController::GetState() const
 
 bool TaskPriorityController::IsEnabled() const
 {
-    return GetState() != ID::states::disabled && GetState() != ID::states::fault;
+    const std::string state = GetState();
+    return state != ID::states::disabled && state != ID::states::disabling && state != ID::states::fault;
 }
 
 const RobotInfo& TaskPriorityController::GetRobotInfo() const
